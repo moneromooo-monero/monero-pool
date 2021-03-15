@@ -57,7 +57,8 @@ class block_t(Structure):
                 ('timestamp', c_longlong)]
 
 def format_block_hash(block_hash):
-    return '{}...{}'.format(block_hash[:4], block_hash[-4:])
+    #return '{}...{}'.format(block_hash[:4], block_hash[-4:])
+    return str(block_hash)
 
 def format_block_status(status):
     s = ["LOCKED", "UNLOCKED", "ORPHANED"]
