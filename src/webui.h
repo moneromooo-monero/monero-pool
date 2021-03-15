@@ -37,11 +37,18 @@ typedef struct pool_stats_t
     uint64_t network_difficulty;
     uint64_t network_hashrate;
     uint64_t network_height;
+    uint64_t aux_network_difficulty;
+    uint64_t aux_network_hashrate;
+    uint64_t aux_network_height;
     uint32_t connected_accounts;
+    uint32_t aux_connected_accounts;
     uint64_t pool_hashrate;
     uint64_t round_hashes;
+    uint64_t aux_round_hashes;
     uint32_t pool_blocks_found;
+    uint32_t pool_aux_blocks_found;
     time_t last_block_found;
+    time_t last_aux_block_found;
     time_t last_template_fetched;
 } pool_stats_t;
 
@@ -51,10 +58,12 @@ typedef struct wui_context_t
     pool_stats_t *pool_stats;
     double pool_fee;
     double payment_threshold;
+    double aux_payment_threshold;
     uint16_t pool_port;
     char pool_listen[256];
     uint16_t pool_ssl_port;
     unsigned allow_self_select;
+    char aux_name[128];
 } wui_context_t;
 
 int start_web_ui(wui_context_t *context);

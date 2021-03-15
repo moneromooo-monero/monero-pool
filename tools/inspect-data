@@ -68,8 +68,8 @@ def format_timestamp(timestamp):
     dt = datetime.fromtimestamp(timestamp)
     return dt.strftime('%Y-%m-%d %H:%M:%S')
 
-def format_amount(amount):
-    return '{0:.6f}'.format(amount/1e12)
+def format_amount(amount, scale):
+    return '{0:.6f}'.format(amount/scale)
 
 def format_address(address):
     return '{}...{}'.format(address[:8], address[-8:])
@@ -77,34 +77,34 @@ def format_address(address):
 def address_from_key(key):
     return key.decode('utf-8').rstrip('\0')
 
-def print_balance(path):
+def print_balance(aux, path):
     env = lmdb.open(path, readonly=True, max_dbs=1, create=False)
-    balance = env.open_db('balance'.encode())
+    balance = env.open_db(('aux-balance' if aux else 'balance').encode())
     with env.begin(db=balance) as txn:
         with txn.cursor() as curs:
             for key, value in curs:
                 address = format_address(address_from_key(key))
                 amount = c_longlong.from_buffer_copy(value).value
-                amount = format_amount(amount)
+                amount = format_amount(amount, 1e8 if aux else 1e12)
                 print('{}\t{}'.format(address, amount))
     env.close()
 
-def print_payements(path):
+def print_payements(aux, path):
     env = lmdb.open(path, readonly=True, max_dbs=1, create=False)
-    payments = env.open_db('payments'.encode())
+    payments = env.open_db(('aux-payments' if aux else 'payments').encode())
     with env.begin(db=payments) as txn:
         with txn.cursor() as curs:
             for key, value in curs:
                 address = format_address(address_from_key(key))
                 p = payment_t.from_buffer_copy(value)
-                amount = format_amount(p.amount)
+                amount = format_amount(p.amount, 1e8 if aux else 1e12)
                 dt = format_timestamp(p.timestamp)
                 print('{}\t{}\t{}'.format(address, amount, dt))
     env.close()
 
-def print_mined(path):
+def print_mined(aux, path):
     env = lmdb.open(path, readonly=True, max_dbs=1, create=False)
-    blocks = env.open_db('blocks'.encode())
+    blocks = env.open_db(('aux-blocks' if aux else 'blocks').encode())
     with env.begin(db=blocks) as txn:
         with txn.cursor() as curs:
             for key, value in curs:
@@ -112,15 +112,15 @@ def print_mined(path):
                 b = block_t.from_buffer_copy(value)
                 bh = format_block_hash(b.hash.decode('utf-8'))
                 dt = format_timestamp(b.timestamp)
-                reward = format_amount(b.reward)
+                reward = format_amount(b.reward, 1e8 if aux else 1e12)
                 status  = format_block_status(b.status)
                 print('{}\t{}\t{}\t{}\t{}'.format(height, bh, status,
                     reward, dt))
     env.close()
 
-def print_shares(path):
+def print_shares(aux, path):
     env = lmdb.open(path, readonly=True, max_dbs=1, create=False)
-    shares = env.open_db('shares'.encode(), dupsort=True)
+    shares = env.open_db(('aux-shares' if aux else 'shares').encode(), dupsort=True)
     with env.begin(db=shares) as txn:
         with txn.cursor() as curs:
             curs.last()
@@ -129,8 +129,9 @@ def print_shares(path):
                 height = c_longlong.from_buffer_copy(key).value
                 share = share_t.from_buffer_copy(value)
                 address = format_address(address_from_key(share.address))
+                difficulty = share.difficulty
                 dt = format_timestamp(share.timestamp)
-                print('{}\t{}\t{}'.format(height, address, dt))
+                print('{}\t{}\t{}\t{}'.format(height, address, difficulty, dt))
                 if not curs.prev():
                     break
     env.close()
@@ -140,22 +141,38 @@ def main():
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument('-b', '--balances', action='store_true',
             help='list miner balances')
+    group.add_argument('-B', '--aux-balances', action='store_true',
+            help='list auxiliary miner balances')
     group.add_argument('-p', '--payments', action='store_true',
             help='list payments made')
+    group.add_argument('-P', '--aux-payments', action='store_true',
+            help='list auxiliary payments made')
     group.add_argument('-m', '--mined', action='store_true',
             help='list mined blocks')
+    group.add_argument('-M', '--aux-mined', action='store_true',
+            help='list auxiliary mined blocks')
     group.add_argument('-s', '--shares', action='store_true',
             help='list recent shares')
+    group.add_argument('-S', '--aux-shares', action='store_true',
+            help='list recent auxiliary shares')
     parser.add_argument('database', help='path to database')
     args = parser.parse_args()
     if args.balances:
-        print_balance(args.database)
+        print_balance(False, args.database)
+    if args.aux_balances:
+        print_balance(True, args.database)
     elif args.payments:
-        print_payements(args.database)
+        print_payements(False, args.database)
+    elif args.aux_payments:
+        print_payements(True, args.database)
     elif args.mined:
-        print_mined(args.database)
+        print_mined(False, args.database)
+    elif args.aux_mined:
+        print_mined(True, args.database)
     elif args.shares:
-        print_shares(args.database)
+        print_shares(False, args.database)
+    elif args.aux_shares:
+        print_shares(True, args.database)
 
 if __name__ == '__main__':
     main()

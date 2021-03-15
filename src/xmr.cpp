@@ -120,6 +120,35 @@ int parse_address(const char *input, uint64_t *prefix,
     return XMR_NO_ERROR;
 }
 
+int parse_aux_address(const char *input, uint64_t *prefix,
+        uint8_t *nettype, unsigned char *pub_spend)
+{
+    uint64_t tag;
+    std::string decoded;
+    if (strncmp(input, "TF1", 3) || !strchr("TFM", input[3]))
+        return XMR_PARSE_ERROR;
+    if (!tools::base58::decode_addr(input + 4, tag, decoded))
+        return XMR_PARSE_ERROR;
+    if (prefix)
+        *prefix = tag;
+#if 1
+    if (nettype)
+        return XMR_MISMATCH_ERROR;
+#else
+    if (nettype && nettype_from_prefix(nettype, tag))
+        return XMR_MISMATCH_ERROR;
+#endif
+    if (pub_spend)
+    {
+        account_public_address address;
+        if (!::serialization::parse_binary(decoded, address))
+            return XMR_PARSE_ERROR;
+        public_key S = address.m_spend_public_key;
+        memcpy(pub_spend, &S, 32);
+    }
+    return XMR_NO_ERROR;
+}
+
 int is_integrated(uint64_t prefix)
 {
     if (prefix == CRYPTONOTE_PUBLIC_INTEGRATED_ADDRESS_BASE58_PREFIX ||

@@ -1,7 +1,7 @@
 <!doctype html>
 <html>
     <head>
-        <title>monero-pool</title>
+        <title>Townforge/Monero merge mining pool</title>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
@@ -44,25 +44,52 @@
         </style>
     </head>
     <body>
-        <header>Monero Mining Pool</header>
+        <header>Townforge/Monero Merge Mining Pool</header>
         <table>
-            <tr><td>Pool HR: </td><td id="pool_hashrate"></td></tr>
-            <tr><td>Network HR: </td><td id="network_hashrate"></td></tr>
-            <tr><td>Network height: </td><td id="network_height"></td></tr>
-            <tr><td>Blocks found: </td><td id="pool_blocks_found"></td></tr>
-            <tr><td>Last block found: </td><td id="last_block_found"></td></tr>
-            <tr><td>Last template: </td><td id="last_template_fetched"></td></tr>
-            <tr><td>Round HR: </td><td id="round_hashrate"></td></tr>
-            <tr><td>Round hashes: </td><td id="round_hashes"></td></tr>
-            <tr><td>Payment threshold: </td><td id="payment_threshold"></td></tr>
-            <tr><td>Pool fee: </td><td id="pool_fee"></td></tr>
-            <tr><td>Pool port: </td><td id="pool_port"></td></tr>
-            <tr><td>Pool SSL port: </td><td id="pool_ssl_port"></td></tr>
-            <tr><td>Allow self-select: </td><td id="allow_self_select"></td></tr>
-            <tr><td>Miners connected: </td><td id="connected_miners"></td></tr>
-            <tr class="miner"><td>Your HR: </td><td id="miner_hashrate"></td></tr>
-            <tr class="miner"><td>Balance due: </td><td id="miner_balance"></td></tr>
-            <tr><td>Miner address: </td><td id="address" contenteditable="true"></td></tr>
+            <tr>
+                <td> <!-- pool -->
+                    <table>
+                        <tr><td><font size="+2">Pool</font></td></tr>
+                        <tr><td>Pool HR: </td><td id="pool_hashrate"></td></tr>
+                        <tr><td>Last template: </td><td id="last_template_fetched"></td></tr>
+                        <tr><td>Pool fee: </td><td id="pool_fee"></td></tr>
+                        <tr><td>Pool port: </td><td id="pool_port"></td></tr>
+                        <tr><td>Pool SSL port: </td><td id="pool_ssl_port"></td></tr>
+                        <tr><td>Allow self-select: </td><td id="allow_self_select"></td></tr>
+                    </table>
+                </td>
+                <td> <!-- Aux -->
+                    <table>
+                        <tr><td><font size="+2"><span id="aux_name">Aux</span></font></td></tr>
+                        <tr><td>Network HR: </td><td id="aux_network_hashrate"></td></tr>
+                        <tr><td>Network height: </td><td id="aux_network_height"></td></tr>
+                        <tr><td>Blocks found: </td><td id="pool_aux_blocks_found"></td></tr>
+                        <tr><td>Last block found: </td><td id="last_aux_block_found"></td></tr>
+                        <tr><td>Round HR: </td><td id="aux_round_hashrate"></td></tr>
+                        <tr><td>Round hashes: </td><td id="aux_round_hashes"></td></tr>
+                        <tr><td>Payment threshold: </td><td id="aux_payment_threshold"></td></tr>
+                        <tr><td>Miners connected: </td><td id="aux_connected_miners"></td></tr>
+                    </table>
+                </td>
+                <td> <!-- Main -->
+                    <table>
+                        <tr><td><font size="+2">Monero</font></td></tr>
+                        <tr><td>Network HR: </td><td id="network_hashrate"></td></tr>
+                        <tr><td>Network height: </td><td id="network_height"></td></tr>
+                        <tr><td>Blocks found: </td><td id="pool_blocks_found"></td></tr>
+                        <tr><td>Last block found: </td><td id="last_block_found"></td></tr>
+                        <tr><td>Round HR: </td><td id="round_hashrate"></td></tr>
+                        <tr><td>Round hashes: </td><td id="round_hashes"></td></tr>
+                        <tr><td>Payment threshold: </td><td id="payment_threshold"></td></tr>
+                        <tr><td>Miners connected: </td><td id="connected_miners"></td></tr>
+                    </table>
+                </td>
+            </tr>
+            <tr>
+                <tr><td>Miner address: </td><td id="address" contenteditable="true" colspan=2></td></tr>
+                <tr class="miner"><td>Your HR: </td><td id="miner_hashrate"></td></tr>
+                <tr class="miner"><td>Balance due: </td><td id="miner_balance"></td></tr>
+            </tr>
         </table>
         <small><a href="https://github.com/jtgrassie/monero-pool">https://github.com/jtgrassie/monero-pool</a></small>
         <script>
@@ -117,7 +144,7 @@
                 else if (h < 1e+3)
                     return parseInt(h) + " H";
                 else if (h < 1e+6)
-                    return max_precision(h*1e-3, 2) + " KH";
+                    return max_precision(h*1e-3, 2) + " kH";
                 else if (h < 1e+9)
                     return max_precision(h*1e-6, 2) + " MH";
                 else
@@ -143,6 +170,7 @@
             var wf = document.querySelector("#address");
             var xhr = new XMLHttpRequest();
             var rhr = document.querySelector("#round_hashrate");
+            var rhr2 = document.querySelector("#aux_round_hashrate");
 
             xhr.onload = function()
             {
@@ -168,6 +196,15 @@
                             format_hashes(stats["network_difficulty"]) + ")";
                         rhr.innerHTML = format_round_hashrate(
                             stats["round_hashes"], stats["last_block_found"]);
+                    }
+                    else if (e == "aux_round_hashes")
+                    {
+                        el.innerHTML = max_precision(stats[e]*100 /
+                            stats["aux_network_difficulty"], 1) + "%" +
+                            " (" + format_hashes(stats[e]) + " / " +
+                            format_hashes(stats["aux_network_difficulty"]) + ")";
+                        rhr2.innerHTML = format_round_hashrate(
+                            stats["aux_round_hashes"], stats["last_aux_block_found"]);
                     }
                     else if (e == "pool_ssl_port")
                     {

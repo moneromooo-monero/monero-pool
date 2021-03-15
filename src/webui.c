@@ -68,10 +68,16 @@ send_json_stats(struct evhttp_request *req, void *arg)
     uint64_t nh = context->pool_stats->network_hashrate;
     uint64_t nd = context->pool_stats->network_difficulty;
     uint64_t height = context->pool_stats->network_height;
+    uint64_t nh2 = context->pool_stats->aux_network_hashrate;
+    uint64_t nd2 = context->pool_stats->aux_network_difficulty;
+    uint64_t height2 = context->pool_stats->aux_network_height;
     uint64_t ltf = context->pool_stats->last_template_fetched;
     uint64_t lbf = context->pool_stats->last_block_found;
+    uint64_t lbf2 = context->pool_stats->last_aux_block_found;
     uint32_t pbf = context->pool_stats->pool_blocks_found;
+    uint32_t pbf2 = context->pool_stats->pool_aux_blocks_found;
     uint64_t rh = context->pool_stats->round_hashes;
+    uint64_t rh2 = context->pool_stats->aux_round_hashes;
     unsigned ss = context->allow_self_select;
     double mh[6] = {0};
     double mb = 0.0;
@@ -86,37 +92,50 @@ send_json_stats(struct evhttp_request *req, void *arg)
             wa += 3;
             account_hr(mh, wa);
             uint64_t balance = account_balance(wa);
-            mb = (double) balance / 1000000000000.0;
+            if (wa[0] == 'T')
+                mb = (double) balance / 100000000.0;
+            else
+                mb = (double) balance / 1000000000000.0;
         }
     }
 
     evbuffer_add_printf(buf, "{"
             "\"pool_hashrate\":%"PRIu64","
             "\"round_hashes\":%"PRIu64","
+            "\"aux_round_hashes\":%"PRIu64","
             "\"network_hashrate\":%"PRIu64","
             "\"network_difficulty\":%"PRIu64","
             "\"network_height\":%"PRIu64","
+            "\"aux_network_hashrate\":%"PRIu64","
+            "\"aux_network_difficulty\":%"PRIu64","
+            "\"aux_network_height\":%"PRIu64","
             "\"last_template_fetched\":%"PRIu64","
             "\"last_block_found\":%"PRIu64","
+            "\"last_aux_block_found\":%"PRIu64","
             "\"pool_blocks_found\":%d,"
+            "\"pool_aux_blocks_found\":%d,"
             "\"payment_threshold\":%g,"
+            "\"aux_payment_threshold\":%g,"
             "\"pool_fee\":%g,"
             "\"pool_port\":%d,"
             "\"pool_ssl_port\":%d,"
             "\"allow_self_select\":%u,"
             "\"connected_miners\":%d,"
+            "\"aux_connected_miners\":%d,"
             "\"miner_hashrate\":%"PRIu64","
             "\"miner_hashrate_stats\":["
                     "%"PRIu64",%"PRIu64",%"PRIu64","
                     "%"PRIu64",%"PRIu64",%"PRIu64"],"
-            "\"miner_balance\":%.8f"
-            "}", ph, rh, nh, nd, height, ltf, lbf, pbf,
-            context->payment_threshold, context->pool_fee,
+            "\"miner_balance\":%.8f,"
+            "\"aux_name\":\"%s\""
+            "}", ph, rh, rh2, nh, nd, height, nh2, nd2, height2, ltf, lbf, lbf2, pbf, pbf2,
+            context->payment_threshold, context->aux_payment_threshold, context->pool_fee,
             context->pool_port, context->pool_ssl_port,
-            ss, context->pool_stats->connected_accounts,
+            ss, context->pool_stats->connected_accounts, context->pool_stats->aux_connected_accounts,
             (uint64_t)mh[0],
             (uint64_t)mh[0], (uint64_t)mh[1], (uint64_t)mh[2],
-            (uint64_t)mh[3], (uint64_t)mh[4], (uint64_t)mh[5], mb);
+            (uint64_t)mh[3], (uint64_t)mh[4], (uint64_t)mh[5], mb,
+            context->aux_name);
     hdrs_out = evhttp_request_get_output_headers(req);
     evhttp_add_header(hdrs_out, "Content-Type", "application/json");
     evhttp_send_reply(req, HTTP_OK, "OK", buf);

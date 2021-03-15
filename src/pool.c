@@ -88,6 +88,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define RPC_PATH "/json_rpc"
 #define ADDRESS_MAX 128
 #define BLOCK_TIME 120
+#define AUX_BLOCK_TIME 60 // not nice to hardcode it
 #define HR_BLOCK_COUNT 5
 #define TEMLATE_HEIGHT_VARIANCE 5
 #define MAX_BAD_SHARES 5
@@ -147,10 +148,14 @@ typedef struct config_t
 {
     char rpc_host[MAX_HOST];
     uint16_t rpc_port;
+    char aux_rpc_host[MAX_HOST];
+    uint16_t aux_rpc_port;
     uint32_t rpc_timeout;
     uint32_t idle_timeout;
     char wallet_rpc_host[MAX_HOST];
     uint16_t wallet_rpc_port;
+    char aux_wallet_rpc_host[MAX_HOST];
+    uint16_t aux_wallet_rpc_port;
     char pool_wallet[ADDRESS_MAX];
     char pool_fee_wallet[ADDRESS_MAX];
     uint64_t pool_start_diff;
@@ -160,6 +165,7 @@ typedef struct config_t
     double retarget_ratio;
     double pool_fee;
     double payment_threshold;
+    double aux_payment_threshold;
     char pool_listen[MAX_HOST];
     uint16_t pool_port;
     uint16_t pool_ssl_port;
@@ -182,6 +188,8 @@ typedef struct config_t
     char pool_view_key[64];
     int processes;
     int32_t cull_shares;
+    uint64_t coin;
+    uint64_t aux_coin;
 
     // merge mining
     char aux_chain_genesis[64];
@@ -222,6 +230,7 @@ typedef struct client_t
     int json_id;
     struct bufferevent *bev;
     char address[ADDRESS_MAX];
+    char aux_address[ADDRESS_MAX];
     char worker_id[64];
     char client_id[32];
     char agent[256];
@@ -286,7 +295,7 @@ struct rpc_callback_t
 
 static config_t config;
 static bstack_t *bst;
-static bstack_t *bsh;
+static bstack_t *bsh[2];
 static struct event_base *pool_base;
 static struct event *listener_event;
 static struct event *timer_30s;
@@ -297,10 +306,10 @@ static uint32_t extra_nonce;
 static uint32_t instance_id;
 static block_t block_headers_range[BLOCK_HEADERS_RANGE];
 static MDB_env *env;
-static MDB_dbi db_shares;
-static MDB_dbi db_blocks;
-static MDB_dbi db_balance;
-static MDB_dbi db_payments;
+static MDB_dbi db_shares[2];
+static MDB_dbi db_blocks[2];
+static MDB_dbi db_balance[2];
+static MDB_dbi db_payments[2];
 static MDB_dbi db_properties;
 static BN_CTX *bn_ctx;
 static BIGNUM *base_diff;
@@ -550,33 +559,42 @@ database_init(const char* data_dir)
         log_fatal("%s", err);
         exit(rc);
     }
-    uint32_t flags = MDB_INTEGERKEY | MDB_CREATE | MDB_DUPSORT | MDB_DUPFIXED;
-    if ((rc = mdb_dbi_open(txn, "shares", flags, &db_shares)) != 0)
+    uint32_t flags = MDB_CREATE;
+    for (int step = 0; step < 2; ++step)
     {
-        err = mdb_strerror(rc);
-        log_fatal("%s", err);
-        exit(rc);
-    }
-    if ((rc = mdb_dbi_open(txn, "blocks", flags, &db_blocks)) != 0)
-    {
-        err = mdb_strerror(rc);
-        log_fatal("%s", err);
-        exit(rc);
-    }
-    flags = MDB_CREATE | MDB_DUPSORT | MDB_DUPFIXED;
-    if ((rc = mdb_dbi_open(txn, "payments", flags, &db_payments)) != 0)
-    {
-        err = mdb_strerror(rc);
-        log_fatal("%s", err);
-        exit(rc);
+        flags = MDB_INTEGERKEY | MDB_CREATE | MDB_DUPSORT | MDB_DUPFIXED;
+        const char *db_name = step == 0 ? "shares" : "aux-shares";
+        if ((rc = mdb_dbi_open(txn, db_name, flags, &db_shares[step])) != 0)
+        {
+            err = mdb_strerror(rc);
+            log_fatal("%s", err);
+            exit(rc);
+        }
+        db_name = step == 0 ? "blocks" : "aux-blocks";
+        if ((rc = mdb_dbi_open(txn, db_name, flags, &db_blocks[step])) != 0)
+        {
+            err = mdb_strerror(rc);
+            log_fatal("%s", err);
+            exit(rc);
+        }
+        flags = MDB_CREATE | MDB_DUPSORT | MDB_DUPFIXED;
+        db_name = step == 0 ? "payments" : "aux-payments";
+        if ((rc = mdb_dbi_open(txn, db_name, flags, &db_payments[step])) != 0)
+        {
+            err = mdb_strerror(rc);
+            log_fatal("%s", err);
+            exit(rc);
+        }
+        flags = MDB_CREATE;
+        db_name = step == 0 ? "balance" : "aux-balance";
+        if ((rc = mdb_dbi_open(txn, db_name, flags, &db_balance[step])) != 0)
+        {
+            err = mdb_strerror(rc);
+            log_fatal("%s", err);
+            exit(rc);
+        }
     }
     flags = MDB_CREATE;
-    if ((rc = mdb_dbi_open(txn, "balance", flags, &db_balance)) != 0)
-    {
-        err = mdb_strerror(rc);
-        log_fatal("%s", err);
-        exit(rc);
-    }
     if ((rc = mdb_dbi_open(txn, "properties", flags, &db_properties)) != 0)
     {
         err = mdb_strerror(rc);
@@ -593,13 +611,16 @@ database_init(const char* data_dir)
     if (!mdb_get(txn, db_properties, &k, &v))
         memcpy(&upstream_last_time, v.mv_data, v.mv_size);
 
-    mdb_set_compare(txn, db_shares, compare_uint64);
-    mdb_set_dupsort(txn, db_shares, compare_share);
-    mdb_set_compare(txn, db_blocks, compare_uint64);
-    mdb_set_dupsort(txn, db_blocks, compare_block);
-    mdb_set_compare(txn, db_payments, compare_string);
-    mdb_set_dupsort(txn, db_payments, compare_payment);
-    mdb_set_compare(txn, db_balance, compare_string);
+    for (int step = 0; step < 2; ++step)
+    {
+        mdb_set_compare(txn, db_shares[step], compare_uint64);
+        mdb_set_dupsort(txn, db_shares[step], compare_share);
+        mdb_set_compare(txn, db_blocks[step], compare_uint64);
+        mdb_set_dupsort(txn, db_blocks[step], compare_block);
+        mdb_set_compare(txn, db_payments[step], compare_string);
+        mdb_set_dupsort(txn, db_payments[step], compare_payment);
+        mdb_set_compare(txn, db_balance[step], compare_string);
+    }
 
     rc = mdb_txn_commit(txn);
     return rc;
@@ -609,16 +630,19 @@ static void
 database_close(void)
 {
     log_info("Closing database");
-    mdb_dbi_close(env, db_shares);
-    mdb_dbi_close(env, db_blocks);
-    mdb_dbi_close(env, db_balance);
-    mdb_dbi_close(env, db_payments);
+    for (int step = 0; step < 2; ++step)
+    {
+        mdb_dbi_close(env, db_shares[step]);
+        mdb_dbi_close(env, db_blocks[step]);
+        mdb_dbi_close(env, db_balance[step]);
+        mdb_dbi_close(env, db_payments[step]);
+    }
     mdb_dbi_close(env, db_properties);
     mdb_env_close(env);
 }
 
 static int
-store_share(uint64_t height, share_t *share)
+store_share(bool aux, uint64_t height, share_t *share)
 {
     int rc = 0;
     char *err = NULL;
@@ -630,7 +654,7 @@ store_share(uint64_t height, share_t *share)
         log_error("%s", err);
         return rc;
     }
-    if ((rc = mdb_cursor_open(txn, db_shares, &cursor)) != 0)
+    if ((rc = mdb_cursor_open(txn, db_shares[!!aux], &cursor)) != 0)
     {
         err = mdb_strerror(rc);
         log_error("%s", err);
@@ -654,7 +678,7 @@ store_share(uint64_t height, share_t *share)
 }
 
 static int
-store_block(uint64_t height, block_t *block)
+store_block(bool aux, uint64_t height, block_t *block)
 {
     int rc = 0;
     char *err = NULL;
@@ -666,7 +690,7 @@ store_block(uint64_t height, block_t *block)
         log_error("%s", err);
         return rc;
     }
-    if ((rc = mdb_cursor_open(txn, db_blocks, &cursor)) != 0)
+    if ((rc = mdb_cursor_open(txn, db_blocks[!!aux], &cursor)) != 0)
     {
         err = mdb_strerror(rc);
         log_error("%s", err);
@@ -722,28 +746,32 @@ account_balance(const char *address)
         log_error("%s", err);
         goto cleanup;
     }
-    if ((rc = mdb_cursor_open(txn, db_balance, &cursor)) != 0)
+    for (int step = 0; step < 2; ++step)
     {
-        err = mdb_strerror(rc);
-        log_error("%s", err);
-        mdb_txn_abort(txn);
-        goto cleanup;
+        if ((rc = mdb_cursor_open(txn, db_balance[step], &cursor)) != 0)
+        {
+            err = mdb_strerror(rc);
+            log_error("%s", err);
+            mdb_txn_abort(txn);
+            goto cleanup;
+        }
+
+        MDB_val key = {ADDRESS_MAX, (void*)address};
+        MDB_val val;
+
+        rc = mdb_cursor_get(cursor, &key, &val, MDB_SET);
+        if (rc != 0 && rc != MDB_NOTFOUND)
+        {
+            err = mdb_strerror(rc);
+            log_error("%s", err);
+            goto cleanup;
+        }
+        if (rc == 0)
+        {
+            balance = *(uint64_t*)val.mv_data;
+            break;
+        }
     }
-
-    MDB_val key = {ADDRESS_MAX, (void*)address};
-    MDB_val val;
-
-    rc = mdb_cursor_get(cursor, &key, &val, MDB_SET);
-    if (rc != 0 && rc != MDB_NOTFOUND)
-    {
-        err = mdb_strerror(rc);
-        log_error("%s", err);
-        goto cleanup;
-    }
-    if (rc != 0)
-        goto cleanup;
-
-    balance = *(uint64_t*)val.mv_data;
 
 cleanup:
     pthread_rwlock_unlock(&rwlock_tx);
@@ -755,9 +783,9 @@ cleanup:
 }
 
 static int
-balance_add(const char *address, uint64_t amount, MDB_txn *parent)
+balance_add(bool aux, const char *address, uint64_t amount, MDB_txn *parent)
 {
-    log_trace("Adding %"PRIu64" to %s's balance", amount, address);
+    log_trace("Adding %"PRIu64" to %s's %s balance", amount, address, aux ? config.aux_chain_name : config.main_chain_name);
     int rc = 0;
     char *err = NULL;
     MDB_txn *txn = NULL;
@@ -768,7 +796,7 @@ balance_add(const char *address, uint64_t amount, MDB_txn *parent)
         log_error("%s", err);
         return rc;
     }
-    if ((rc = mdb_cursor_open(txn, db_balance, &cursor)) != 0)
+    if ((rc = mdb_cursor_open(txn, db_balance[!!aux], &cursor)) != 0)
     {
         err = mdb_strerror(rc);
         log_error("%s", err);
@@ -816,12 +844,12 @@ balance_add(const char *address, uint64_t amount, MDB_txn *parent)
 }
 
 static int
-payout_block(block_t *block, MDB_txn *parent)
+payout_block(bool aux, block_t *block, MDB_txn *parent)
 {
     /*
       PPLNS
     */
-    log_info("Payout on block at height: %"PRIu64, block->height);
+    log_info("Payout on %s block at height: %"PRIu64, aux ? config.aux_chain_name : config.main_chain_name, block->height);
     int rc = 0;
     char *err = NULL;
     MDB_txn *txn = NULL;
@@ -834,7 +862,7 @@ payout_block(block_t *block, MDB_txn *parent)
         log_error("%s", err);
         return rc;
     }
-    if ((rc = mdb_cursor_open(txn, db_shares, &cursor)) != 0)
+    if ((rc = mdb_cursor_open(txn, db_shares[!!aux], &cursor)) != 0)
     {
         err = mdb_strerror(rc);
         log_error("%s", err);
@@ -876,7 +904,7 @@ payout_block(block_t *block, MDB_txn *parent)
         amount -= fee;
         if (fee > 0 && config.pool_fee_wallet[0])
         {
-            rc = balance_add(config.pool_fee_wallet, fee, txn);
+            rc = balance_add(aux, config.pool_fee_wallet, fee, txn);
             if (rc != 0)
             {
                 err = mdb_strerror(rc);
@@ -885,14 +913,17 @@ payout_block(block_t *block, MDB_txn *parent)
         }
         if (amount == 0)
             continue;
-        rc = balance_add(share->address, amount, txn);
-        if (rc != 0)
+        if (share->address[0])
         {
-            err = mdb_strerror(rc);
-            log_error("%s", err);
-            mdb_cursor_close(cursor);
-            mdb_txn_abort(txn);
-            return rc;
+            rc = balance_add(aux, share->address, amount, txn);
+            if (rc != 0)
+            {
+                err = mdb_strerror(rc);
+                log_error("%s", err);
+                mdb_cursor_close(cursor);
+                mdb_txn_abort(txn);
+                return rc;
+            }
         }
     }
 
@@ -901,12 +932,12 @@ payout_block(block_t *block, MDB_txn *parent)
 }
 
 static int
-process_blocks(block_t *blocks, size_t count)
+process_blocks(bool aux, block_t *blocks, size_t count)
 {
     if (!abattoir)
         return 0;
 
-    log_debug("Processing blocks");
+    log_debug("Processing %zu %s blocks", count, aux ? config.aux_chain_name : config.main_chain_name);
     /*
       For each block, lookup block in db.
       If found, make sure found is locked and not orphaned.
@@ -923,7 +954,7 @@ process_blocks(block_t *blocks, size_t count)
         log_error("%s", err);
         return rc;
     }
-    if ((rc = mdb_cursor_open(txn, db_blocks, &cursor)) != 0)
+    if ((rc = mdb_cursor_open(txn, db_blocks[!!aux], &cursor)) != 0)
     {
         err = mdb_strerror(rc);
         log_error("%s", err);
@@ -934,7 +965,7 @@ process_blocks(block_t *blocks, size_t count)
     for (size_t i=0; i<count; i++)
     {
         block_t *ib = &blocks[i];
-        log_trace("Processing block at height %"PRIu64, ib->height);
+        log_trace("Processing block at height %"PRIu64", chain has %64.64s", ib->height, ib->hash);
         MDB_val key = { sizeof(ib->height), (void*)&ib->height };
         MDB_val val;
         MDB_cursor_op op = MDB_SET;
@@ -968,9 +999,17 @@ process_blocks(block_t *blocks, size_t count)
                 log_debug("Orphaned block at height: %"PRIu64, ib->height);
                 nb.status |= BLOCK_ORPHANED;
                 MDB_val new_val = {sizeof(block_t), (void*)&nb};
-                mdb_cursor_put(cursor, &key, &new_val, MDB_CURRENT);
+                rc = mdb_cursor_put(cursor, &key, &new_val, MDB_CURRENT);
+                if (rc)
+                {
+                    err = mdb_strerror(rc);
+                    log_warn("Failed to update block to orphaned at height: %"PRIu64
+                            ", with error: %d",
+                            ib->height, err);
+                }
                 continue;
             }
+#if 0
             if (memcmp(ib->prev_hash, sb->prev_hash, 64) != 0)
             {
                 log_warn("Block with matching height and hash "
@@ -978,26 +1017,48 @@ process_blocks(block_t *blocks, size_t count)
                         "Setting orphaned.\n");
                 nb.status |= BLOCK_ORPHANED;
                 MDB_val new_val = {sizeof(block_t), (void*)&nb};
-                mdb_cursor_put(cursor, &key, &new_val, MDB_CURRENT);
+                rc = mdb_cursor_put(cursor, &key, &new_val, MDB_CURRENT);
+                if (rc)
+                {
+                    err = mdb_strerror(rc);
+                    log_warn("Failed to update block to orphaned at height: %"PRIu64
+                            ", with error: %d",
+                            ib->height, err);
+                }
                 continue;
             }
+#endif
             if (ib->status & BLOCK_ORPHANED)
             {
                 log_debug("Orphaned block at height: %"PRIu64, ib->height);
                 nb.status |= BLOCK_ORPHANED;
                 MDB_val new_val = {sizeof(block_t), (void*)&nb};
-                mdb_cursor_put(cursor, &key, &new_val, MDB_CURRENT);
+                rc = mdb_cursor_put(cursor, &key, &new_val, MDB_CURRENT);
+                if (rc)
+                {
+                    err = mdb_strerror(rc);
+                    log_warn("Failed to update block to orphaned at height: %"PRIu64
+                            ", with error: %d",
+                            ib->height, err);
+                }
                 continue;
             }
             nb.status |= BLOCK_UNLOCKED;
             nb.reward = ib->reward;
             if (!*config.upstream_host)
-                rc = payout_block(&nb, txn);
+                rc = payout_block(aux, &nb, txn);
             if (*config.upstream_host || rc == 0)
             {
-                log_debug("Paid out block: %"PRIu64, nb.height);
+                log_debug("Paid out %s block: %"PRIu64, aux ? config.aux_chain_name : config.main_chain_name, nb.height);
                 MDB_val new_val = {sizeof(block_t), (void*)&nb};
-                mdb_cursor_put(cursor, &key, &new_val, MDB_CURRENT);
+                rc = mdb_cursor_put(cursor, &key, &new_val, MDB_CURRENT);
+                if (rc)
+                {
+                    err = mdb_strerror(rc);
+                    log_warn("Failed to update block to unlocked at height: %"PRIu64
+                            ", with error: %d",
+                            ib->height, err);
+                }
             }
             else
                 log_trace("%s", mdb_strerror(rc));
@@ -1584,7 +1645,7 @@ rpc_on_response(struct evhttp_request *req, void *arg)
 }
 
 static void
-rpc_request_with_header(struct event_base *base, const char *body,
+rpc_request_with_header(bool aux, struct event_base *base, const char *body,
         rpc_callback_t *callback, const char *extra_header, const char *extra_header_value)
 {
     struct evhttp_connection *con;
@@ -1593,7 +1654,7 @@ rpc_request_with_header(struct event_base *base, const char *body,
     struct evbuffer *output;
 
     con = evhttp_connection_base_new(base, NULL,
-            config.rpc_host, config.rpc_port);
+            aux ? config.aux_rpc_host : config.rpc_host, aux ? config.aux_rpc_port : config.rpc_port);
     evhttp_connection_free_on_completion(con);
     evhttp_connection_set_timeout(con, config.rpc_timeout);
     req = evhttp_request_new(rpc_on_response, callback);
@@ -1611,11 +1672,18 @@ static void
 rpc_request(struct event_base *base, const char *body,
         rpc_callback_t *callback)
 {
-  rpc_request_with_header(base, body, callback, NULL, NULL);
+  rpc_request_with_header(false, base, body, callback, NULL, NULL);
 }
 
 static void
-rpc_wallet_request(struct event_base *base, const char *body,
+aux_rpc_request(struct event_base *base, const char *body,
+        rpc_callback_t *callback)
+{
+  rpc_request_with_header(true, base, body, callback, NULL, NULL);
+}
+
+static void
+rpc_wallet_request(bool aux, struct event_base *base, const char *body,
         rpc_callback_t *callback)
 {
     struct evhttp_connection *con;
@@ -1624,7 +1692,7 @@ rpc_wallet_request(struct event_base *base, const char *body,
     struct evbuffer *output;
 
     con = evhttp_connection_base_new(base, NULL,
-            config.wallet_rpc_host, config.wallet_rpc_port);
+            aux ? config.aux_wallet_rpc_host : config.wallet_rpc_host, aux ? config.aux_wallet_rpc_port : config.wallet_rpc_port);
     evhttp_connection_free_on_completion(con);
     evhttp_connection_set_timeout(con, config.rpc_timeout);
     req = evhttp_request_new(rpc_on_response, callback);
@@ -1683,7 +1751,7 @@ rpc_get_request_body(char *body, const char *method, char *fmt, ...)
 }
 
 static void
-rpc_on_block_header_by_height(const char* data, rpc_callback_t *callback)
+rpc_on_block_header_by_height_mux(bool aux, const char* data, rpc_callback_t *callback)
 {
     log_trace("Got block header by height: \n%s", data);
     json_object *root = json_tokener_parse(data);
@@ -1711,12 +1779,24 @@ rpc_on_block_header_by_height(const char* data, rpc_callback_t *callback)
     block_t rb;
     JSON_GET_OR_WARN(block_header, result, json_type_object);
     response_to_block(block_header, &rb);
-    process_blocks(&rb, 1);
+    process_blocks(aux, &rb, 1);
     json_object_put(root);
 }
 
 static void
-rpc_on_block_headers_range(const char* data, rpc_callback_t *callback)
+rpc_on_block_header_by_height(const char* data, rpc_callback_t *callback)
+{
+  rpc_on_block_header_by_height_mux(false, data, callback);
+}
+
+static void
+aux_rpc_on_block_header_by_height(const char* data, rpc_callback_t *callback)
+{
+  rpc_on_block_header_by_height_mux(true, data, callback);
+}
+
+static void
+rpc_on_block_headers_range_mux(bool aux, const char* data, rpc_callback_t *callback)
 {
     json_object *root = json_tokener_parse(data);
     JSON_GET_OR_WARN(result, root, json_type_object);
@@ -1749,8 +1829,20 @@ rpc_on_block_headers_range(const char* data, rpc_callback_t *callback)
         block_t *bh = &block_headers_range[i];
         response_to_block(header, bh);
     }
-    process_blocks(block_headers_range, BLOCK_HEADERS_RANGE);
+    process_blocks(aux, block_headers_range, BLOCK_HEADERS_RANGE);
     json_object_put(root);
+}
+
+static void
+rpc_on_block_headers_range(const char* data, rpc_callback_t *callback)
+{
+  rpc_on_block_headers_range_mux(false, data, callback);
+}
+
+static void
+aux_rpc_on_block_headers_range(const char* data, rpc_callback_t *callback)
+{
+  rpc_on_block_headers_range_mux(true, data, callback);
 }
 
 static void
@@ -1787,7 +1879,7 @@ rpc_on_block_template(const char* data, rpc_callback_t *callback)
 }
 
 static int
-startup_scan_round_shares(void)
+startup_scan_round_shares(bool aux)
 {
     int rc = 0;
     char *err = NULL;
@@ -1803,7 +1895,7 @@ startup_scan_round_shares(void)
         log_error("%s", err);
         return rc;
     }
-    if ((rc = mdb_cursor_open(txn, db_shares, &cursor)) != 0)
+    if ((rc = mdb_cursor_open(txn, db_shares[!!aux], &cursor)) != 0)
     {
         err = mdb_strerror(rc);
         log_error("%s", err);
@@ -1826,8 +1918,13 @@ startup_scan_round_shares(void)
             break;
         op = MDB_PREV;
         share_t *share = (share_t*)val.mv_data;
-        if (share->timestamp > pool_stats.last_block_found)
-            pool_stats.round_hashes += share->difficulty;
+        if (share->timestamp > (aux ? pool_stats.last_aux_block_found : pool_stats.last_block_found))
+        {
+            if (aux)
+                pool_stats.aux_round_hashes += share->difficulty;
+            else
+                pool_stats.round_hashes += share->difficulty;
+        }
         else
             break;
     }
@@ -1837,7 +1934,7 @@ startup_scan_round_shares(void)
 }
 
 static int
-startup_payout(uint64_t height)
+startup_payout(bool aux, uint64_t height)
 {
     /*
       Loop stored blocks < height - 60
@@ -1853,7 +1950,7 @@ startup_payout(uint64_t height)
         log_error("%s", err);
         return rc;
     }
-    if ((rc = mdb_cursor_open(txn, db_blocks, &cursor)) != 0)
+    if ((rc = mdb_cursor_open(txn, db_blocks[!!aux], &cursor)) != 0)
     {
         err = mdb_strerror(rc);
         log_error("%s", err);
@@ -1861,7 +1958,10 @@ startup_payout(uint64_t height)
         return rc;
     }
 
-    pool_stats.pool_blocks_found = 0;
+    if (aux)
+      pool_stats.pool_aux_blocks_found = 0;
+    else
+      pool_stats.pool_blocks_found = 0;
     MDB_cursor_op op = MDB_FIRST;
     while (1)
     {
@@ -1878,13 +1978,21 @@ startup_payout(uint64_t height)
         if (rc == MDB_NOTFOUND)
             break;
 
-        pool_stats.pool_blocks_found++;
+        if (aux)
+            pool_stats.pool_aux_blocks_found++;
+        else
+            pool_stats.pool_blocks_found++;
         block_t *block = (block_t*)val.mv_data;
 
         if (!upstream_event)
-            pool_stats.last_block_found = block->timestamp;
+        {
+            if (aux)
+                pool_stats.last_aux_block_found = block->timestamp;
+            else
+                pool_stats.last_block_found = block->timestamp;
+        }
 
-        if (block->height > height - 60)
+        if (block->height + 60 > height)
             continue;
         if (block->status != BLOCK_LOCKED)
             continue;
@@ -1893,8 +2001,8 @@ startup_payout(uint64_t height)
         rpc_get_request_body(body, "get_block_header_by_height", "sd",
                 "height", block->height);
         rpc_callback_t *cb = rpc_callback_new(
-                rpc_on_block_header_by_height, 0, 0);
-        rpc_request(pool_base, body, cb);
+                aux ? aux_rpc_on_block_header_by_height : rpc_on_block_header_by_height, 0, 0);
+        rpc_request_with_header(aux, pool_base, body, cb, NULL, NULL);
     }
 
     mdb_cursor_close(cursor);
@@ -1926,7 +2034,7 @@ rpc_on_view_key(const char* data, rpc_callback_t *callback)
 }
 
 static void
-rpc_on_last_block_header(const char* data, rpc_callback_t *callback)
+rpc_on_last_block_header(bool aux, const char* data, rpc_callback_t *callback)
 {
     log_trace("Got last block header: \n%s", data);
     json_object *root = json_tokener_parse(data);
@@ -1956,26 +2064,35 @@ rpc_on_last_block_header(const char* data, rpc_callback_t *callback)
     JSON_GET_OR_WARN(height, block_header, json_type_int);
     uint64_t bh = json_object_get_int64(height);
     bool need_new_template = false;
-    block_t *top = bstack_top(bsh);
+    block_t *top = bstack_top(bsh[!!aux]);
     if (top && bh > top->height)
     {
         need_new_template = true;
-        block_t *block = bstack_push(bsh, NULL);
+        block_t *block = bstack_push(bsh[!!aux], NULL);
         response_to_block(block_header, block);
     }
     else if (!top)
     {
-        block_t *block = bstack_push(bsh, NULL);
+        block_t *block = bstack_push(bsh[!!aux], NULL);
         response_to_block(block_header, block);
-        startup_payout(block->height);
-        startup_scan_round_shares();
+        startup_payout(aux, block->height);
+        startup_scan_round_shares(aux);
         need_new_template = true;
     }
 
-    top = bstack_top(bsh);
-    pool_stats.network_difficulty = top->difficulty;
-    pool_stats.network_hashrate = top->difficulty / BLOCK_TIME;
-    pool_stats.network_height = top->height;
+    top = bstack_top(bsh[!!aux]);
+    if (aux)
+    {
+      pool_stats.aux_network_difficulty = top->difficulty;
+      pool_stats.aux_network_hashrate = top->difficulty / AUX_BLOCK_TIME;
+      pool_stats.aux_network_height = top->height + 1;
+    }
+    else
+    {
+      pool_stats.network_difficulty = top->difficulty;
+      pool_stats.network_hashrate = top->difficulty / BLOCK_TIME;
+      pool_stats.network_height = top->height + 1;
+    }
     update_pool_hr();
 
     if (need_new_template)
@@ -1988,16 +2105,38 @@ rpc_on_last_block_header(const char* data, rpc_callback_t *callback)
         rpc_callback_t *cb1 = rpc_callback_new(rpc_on_block_template, 0, 0);
         rpc_request(pool_base, body, cb1);
 
-        uint64_t end = top->height - 60;
-        uint64_t start = end - BLOCK_HEADERS_RANGE + 1;
-        rpc_get_request_body(body, "get_block_headers_range", "sdsd",
-                "start_height", start, "end_height", end);
-        rpc_callback_t *cb2 = rpc_callback_new(
-                rpc_on_block_headers_range, 0, 0);
-        rpc_request(pool_base, body, cb2);
+        if (top->height >= BLOCK_HEADERS_RANGE + 60 - 1)
+        {
+            uint64_t end = top->height - 60;
+            uint64_t start = end - BLOCK_HEADERS_RANGE + 1;
+            rpc_get_request_body(body, "get_block_headers_range", "sdsd",
+                    "start_height", start, "end_height", end);
+            if (aux)
+            {
+                rpc_callback_t *cb2 = rpc_callback_new(aux_rpc_on_block_headers_range, 0, 0);
+                aux_rpc_request(pool_base, body, cb2);
+            }
+            else
+            {
+                rpc_callback_t *cb2 = rpc_callback_new(rpc_on_block_headers_range, 0, 0);
+                rpc_request(pool_base, body, cb2);
+            }
+        }
     }
 
     json_object_put(root);
+}
+
+static void
+monero_rpc_on_last_block_header(const char* data, rpc_callback_t *callback)
+{
+  rpc_on_last_block_header(false, data, callback);
+}
+
+static void
+aux_rpc_on_last_block_header(const char* data, rpc_callback_t *callback)
+{
+  rpc_on_last_block_header(true, data, callback);
 }
 
 static void
@@ -2009,6 +2148,9 @@ rpc_on_block_submitted(const char* data, rpc_callback_t *callback)
     const char *ss = json_object_get_string(status);
     json_object *error = NULL;
     json_object_object_get_ex(root, "error", &error);
+    bool accepted_monero = false, accepted_aux = false;
+    const char *aux_block_hash;
+    uint64_t monero_height = 0, aux_height = 0;
     /*
       The RPC reports submission as an error even when it's added as
       an alternative block. Thus, still store it. This doesn't matter
@@ -2040,11 +2182,31 @@ rpc_on_block_submitted(const char* data, rpc_callback_t *callback)
           for (size_t i = 0; i < len; ++i)
           {
             json_object *j = array_list_get_idx(al, i);
-            if (j && json_object_is_type(j, json_type_string))
+            if (j && json_object_is_type(j, json_type_object))
             {
-              const char *genesis = json_object_get_string(j);
-              const char *name = strncmp(genesis, config.aux_chain_genesis, 64) == 0 ? config.aux_chain_name : strncmp(genesis, config.main_chain_genesis, 64) == 0 ? config.main_chain_name : "unknown";
-              log_info("  %s", name);
+              JSON_GET_OR_WARN(genesis, j, json_type_string);
+              JSON_GET_OR_WARN(height, j, json_type_int);
+              if (genesis && height)
+              {
+                const char *name = "unknown";
+                const char *genesis_str = json_object_get_string(genesis);
+                if (!strncmp(genesis_str, config.aux_chain_genesis, 64))
+                {
+                  name = config.aux_chain_name;
+                  aux_height = json_object_get_int64(height);
+                  accepted_aux = true;
+                  JSON_GET_OR_WARN(block_hash, j, json_type_string);
+                  if (block_hash)
+                    aux_block_hash = json_object_get_string(block_hash);
+                }
+                else if (!strncmp(genesis_str, config.main_chain_genesis, 64))
+                {
+                  name = config.main_chain_name;
+                  monero_height = json_object_get_int64(height);
+                  accepted_monero = true;
+                }
+                log_info("  %s", name);
+              }
             }
           }
         }
@@ -2052,22 +2214,48 @@ rpc_on_block_submitted(const char* data, rpc_callback_t *callback)
           log_warn("Not an array");
       }
     }
-    pool_stats.pool_blocks_found++;
+    if (accepted_monero)
+      pool_stats.pool_blocks_found++;
+    if (accepted_aux)
+      pool_stats.pool_aux_blocks_found++;
     block_t *b = (block_t*)callback->data;
     if (!upstream_event)
     {
-        pool_stats.last_block_found = b->timestamp;
-        pool_stats.round_hashes = 0;
+        if (accepted_monero)
+        {
+          pool_stats.last_block_found = b->timestamp;
+          pool_stats.round_hashes = 0;
+        }
+        if (accepted_aux)
+        {
+          pool_stats.last_aux_block_found = b->timestamp;
+          pool_stats.aux_round_hashes = 0;
+        }
     }
-    log_info("Block submitted at height: %"PRIu64, b->height);
-    int rc = store_block(b->height, b);
-    if (rc != 0)
-        log_warn("Failed to store block: %s", mdb_strerror(rc));
+    if (accepted_monero)
+    {
+      block_t b2 = *b;
+      b2.height = monero_height;
+      log_info("Monero block submitted at height: %"PRIu64, b2.height);
+      int rc = store_block(false, b2.height, &b2);
+      if (rc != 0)
+          log_warn("Failed to store Monero block: %s", mdb_strerror(rc));
+    }
+    if (accepted_aux)
+    {
+      block_t b2 = *b;
+      b2.height = aux_height;
+      strncpy(b2.hash, aux_block_hash, 64);
+      log_info("Aux block submitted at height: %"PRIu64, b2.height);
+      int rc = store_block(true, b2.height, &b2);
+      if (rc != 0)
+          log_warn("Failed to store aux block: %s", mdb_strerror(rc));
+    }
     json_object_put(root);
 }
 
 static void
-rpc_on_wallet_transferred(const char* data, rpc_callback_t *callback)
+rpc_on_wallet_transferred_mux(bool aux, const char* data, rpc_callback_t *callback)
 {
     log_trace("Transfer response: \n%s", data);
     json_object *root = json_tokener_parse(data);
@@ -2080,7 +2268,7 @@ rpc_on_wallet_transferred(const char* data, rpc_callback_t *callback)
         JSON_GET_OR_WARN(message, error, json_type_string);
         int ec = json_object_get_int(code);
         const char *em = json_object_get_string(message);
-        log_error("Error (%d) with wallet transfer: %s", ec, em);
+        log_error("Error (%d) with %s wallet transfer: %s", ec, aux ? config.aux_chain_name : config.main_chain_name, em);
     }
     else
         log_info("Payout transfer successful");
@@ -2097,7 +2285,7 @@ rpc_on_wallet_transferred(const char* data, rpc_callback_t *callback)
         log_error("%s", err);
         goto cleanup;
     }
-    if ((rc = mdb_cursor_open(txn, db_balance, &cursor)) != 0)
+    if ((rc = mdb_cursor_open(txn, db_balance[!!aux], &cursor)) != 0)
     {
         err = mdb_strerror(rc);
         log_error("%s", err);
@@ -2164,7 +2352,7 @@ rpc_on_wallet_transferred(const char* data, rpc_callback_t *callback)
         log_error("%s", err);
         goto cleanup;
     }
-    if ((rc = mdb_cursor_open(txn, db_payments, &cursor)) != 0)
+    if ((rc = mdb_cursor_open(txn, db_payments[!!aux], &cursor)) != 0)
     {
         err = mdb_strerror(rc);
         log_error("%s", err);
@@ -2197,12 +2385,24 @@ cleanup:
     json_object_put(root);
 }
 
+static void
+rpc_on_wallet_transferred_main(const char* data, rpc_callback_t *callback)
+{
+  rpc_on_wallet_transferred_mux(false, data, callback);
+}
+
+static void
+rpc_on_wallet_transferred_aux(const char* data, rpc_callback_t *callback)
+{
+  rpc_on_wallet_transferred_mux(true, data, callback);
+}
+
 static int
-send_payments(void)
+send_payments(bool aux)
 {
     if (*config.upstream_host || config.disable_payouts)
         return 0;
-    uint64_t threshold = 1000000000000 * config.payment_threshold;
+    uint64_t threshold = aux ? (config.aux_coin * config.aux_payment_threshold) : (config.coin * config.payment_threshold);
     int rc = 0;
     char *err = NULL;
     MDB_txn *txn = NULL;
@@ -2213,7 +2413,7 @@ send_payments(void)
         log_error("%s", err);
         return rc;
     }
-    if ((rc = mdb_cursor_open(txn, db_balance, &cursor)) != 0)
+    if ((rc = mdb_cursor_open(txn, db_balance[!!aux], &cursor)) != 0)
     {
         err = mdb_strerror(rc);
         log_error("%s", err);
@@ -2240,7 +2440,7 @@ send_payments(void)
         if (amount < threshold)
             continue;
 
-        log_info("Sending payment: %"PRIu64", %.8s", amount, address);
+        log_info("Sending %s payment: %"PRIu64", %.8s", aux ? config.aux_chain_name : config.main_chain_name, amount, address);
 
         payment_t *p = (payment_t*) gbag_get(bag_pay);
         strncpy(p->address, address, ADDRESS_MAX-1);
@@ -2274,8 +2474,8 @@ send_payments(void)
         }
         log_trace(body);
         rpc_callback_t *cb = rpc_callback_new(
-                rpc_on_wallet_transferred, bag_pay, rpc_bag_free);
-        rpc_wallet_request(pool_base, body, cb);
+                aux ? rpc_on_wallet_transferred_aux : rpc_on_wallet_transferred_main, bag_pay, rpc_bag_free);
+        rpc_wallet_request(aux, pool_base, body, cb);
     }
     else
         gbag_free(bag_pay);
@@ -2284,7 +2484,7 @@ send_payments(void)
 }
 
 static void
-fetch_view_key(void)
+fetch_view_key(bool aux)
 {
     if (*config.pool_view_key)
     {
@@ -2297,17 +2497,19 @@ fetch_view_key(void)
     char body[RPC_BODY_MAX] = {0};
     rpc_get_request_body(body, "query_key", "ss", "key_type", "view_key");
     rpc_callback_t *cb = rpc_callback_new(rpc_on_view_key, 0, 0);
-    rpc_wallet_request(pool_base, body, cb);
+    rpc_wallet_request(aux, pool_base, body, cb);
 }
 
 static void
-fetch_last_block_header(void)
+fetch_last_block_headers(void)
 {
     log_info("Fetching last block header");
     char body[RPC_BODY_MAX] = {0};
     rpc_get_request_body(body, "get_last_block_header", NULL);
-    rpc_callback_t *cb = rpc_callback_new(rpc_on_last_block_header, 0, 0);
+    rpc_callback_t *cb = rpc_callback_new(monero_rpc_on_last_block_header, 0, 0);
     rpc_request(pool_base, body, cb);
+    cb = rpc_callback_new(aux_rpc_on_last_block_header, 0, 0);
+    aux_rpc_request(pool_base, body, cb);
 }
 
 static int
@@ -2496,14 +2698,14 @@ upstream_send_backlog(void)
         log_error("%s", err);
         return;
     }
-    if ((rc = mdb_cursor_open(txn, db_shares, &curshr)))
+    if ((rc = mdb_cursor_open(txn, db_shares[0], &curshr)))
     {
         err = mdb_strerror(rc);
         log_error("%s", err);
         mdb_txn_abort(txn);
         return;
     }
-    if ((rc = mdb_cursor_open(txn, db_blocks, &curblk)))
+    if ((rc = mdb_cursor_open(txn, db_blocks[0], &curblk)))
     {
         err = mdb_strerror(rc);
         log_error("%s", err);
@@ -2558,14 +2760,18 @@ trusted_on_account_connect(client_t *client)
     struct evbuffer *input = bufferevent_get_input(client->bev);
     uint32_t count;
     evbuffer_remove(input, &count, sizeof(uint32_t));
-    pool_stats.connected_accounts += count;
+    if (client->address[0])
+      pool_stats.connected_accounts += count;
+    if (client->aux_address[0])
+      pool_stats.aux_connected_accounts += count;
     client->downstream_accounts += count;
     log_trace("Downstream account connected");
     trusted_send_stats(client);
     if (upstream_event)
         upstream_send_account_connect(count);
-    log_trace("Pool accounts: %d, workers: %d, hashrate: %"PRIu64,
+    log_trace("Pool accounts: %d/%d, workers: %d, hashrate: %"PRIu64,
             pool_stats.connected_accounts,
+            pool_stats.aux_connected_accounts,
             gbag_used(bag_clients),
             pool_stats.pool_hashrate);
 }
@@ -2573,15 +2779,19 @@ trusted_on_account_connect(client_t *client)
 static void
 trusted_on_account_disconnect(client_t *client)
 {
-    pool_stats.connected_accounts--;
+    if (client->address[0])
+        pool_stats.connected_accounts--;
+    if (client->aux_address[0])
+        pool_stats.aux_connected_accounts--;
     if (client->downstream_accounts)
         client->downstream_accounts--;
     log_trace("Downstream account disconnected");
     trusted_send_stats(client);
     if (upstream_event)
         upstream_send_account_disconnect();
-    log_trace("Pool accounts: %d, workers: %d, hashrate: %"PRIu64,
+    log_trace("Pool accounts: %d/%d, workers: %d, hashrate: %"PRIu64,
             pool_stats.connected_accounts,
+            pool_stats.aux_connected_accounts,
             gbag_used(bag_clients),
             pool_stats.pool_hashrate);
 }
@@ -2602,7 +2812,7 @@ trusted_on_client_share(client_t *client)
     pool_stats.round_hashes += s.difficulty;
     client->hr_stats.diff_since += s.difficulty;
     hr_update(&client->hr_stats);
-    rc = store_share(s.height, &s);
+    rc = store_share(false, s.height, &s);
     if (rc != 0)
         log_warn("Failed to store share: %s", mdb_strerror(rc));
     trusted_send_stats(client);
@@ -2622,7 +2832,7 @@ trusted_on_client_block(client_t *client)
     pool_stats.last_block_found = b.timestamp;
     pool_stats.round_hashes = 0;
     log_info("Block submitted by downstream: %.8s, %"PRIu64, b.hash, b.height);
-    rc = store_block(b.height, &b);
+    rc = store_block(false, b.height, &b);
     if (rc != 0)
         log_warn("Failed to store block: %s", mdb_strerror(rc));
     trusted_send_stats(client);
@@ -2636,8 +2846,9 @@ upstream_on_stats(struct bufferevent *bev)
     struct evbuffer *input = bufferevent_get_input(bev);
     evbuffer_remove(input, &pool_stats, sizeof(pool_stats_t));
     log_trace("Stats from upstream: "
-            "%d, %"PRIu64", %"PRIu64", %d, %"PRIu64,
+            "%d, %d, %"PRIu64", %"PRIu64", %d, %"PRIu64,
             pool_stats.connected_accounts,
+            pool_stats.aux_connected_accounts,
             pool_stats.pool_hashrate,
             pool_stats.round_hashes,
             pool_stats.pool_blocks_found,
@@ -2664,7 +2875,7 @@ upstream_on_balance(struct bufferevent *bev)
     }
     MDB_val k = {ADDRESS_MAX, (void*)address};
     MDB_val v = {sizeof(uint64_t), (void*)&balance};
-    if ((rc = mdb_put(txn, db_balance, &k, &v, 0)))
+    if ((rc = mdb_put(txn, db_balance[0], &k, &v, 0)))
     {
         err = mdb_strerror(rc);
         log_error("%s", err);
@@ -2811,7 +3022,7 @@ static void
 timer_on_120s(int fd, short kind, void *ctx)
 {
     log_trace("Fetching last block header from timer");
-    fetch_last_block_header();
+    fetch_last_block_headers();
     struct timeval timeout = { .tv_sec = 120, .tv_usec = 0 };
     evtimer_add(timer_120s, &timeout);
 }
@@ -2832,7 +3043,8 @@ timer_on_10m(int fd, short kind, void *ctx)
     if (database_resize())
         log_warn("DB resize needed, will retry later");
 
-    send_payments();
+    send_payments(true);
+    send_payments(false);
 
     /* culling old shares */
     if (config.cull_shares < 1)
@@ -2843,13 +3055,16 @@ timer_on_10m(int fd, short kind, void *ctx)
         log_error("%s", mdb_strerror(rc));
         goto done;
     }
-    if ((rc = mdb_cursor_open(txn, db_shares, &cursor)) != 0)
+    for (int pass = 0; pass < 2; ++pass)
     {
+      bool aux = pass == 0;
+      if ((rc = mdb_cursor_open(txn, db_shares[!!aux], &cursor)) != 0)
+      {
         log_error("%s", mdb_strerror(rc));
         goto abort;
-    }
-    while (1)
-    {
+      }
+      while (1)
+      {
         time_t st;
         if ((rc = mdb_cursor_get(cursor, &k, &v, op)))
         {
@@ -2873,6 +3088,7 @@ timer_on_10m(int fd, short kind, void *ctx)
         else
             break;
         op = MDB_NEXT;
+      }
     }
 
     mdb_cursor_close(cursor);
@@ -2949,7 +3165,7 @@ static void
 client_clear(struct bufferevent *bev)
 {
     client_t *client = NULL;
-    account_t *account = NULL;
+    account_t *account[2] = {NULL, NULL};
     client_find(bev, &client);
     if (!client)
         return;
@@ -2959,23 +3175,32 @@ client_clear(struct bufferevent *bev)
         goto clear;
     }
     pthread_rwlock_rdlock(&rwlock_acc);
-    HASH_FIND_STR(accounts, client->address, account);
+    if (client->address[0])
+        HASH_FIND_STR(accounts, client->address, account[0]);
+    if (client->aux_address[0])
+        HASH_FIND_STR(accounts, client->aux_address, account[1]);
     pthread_rwlock_unlock(&rwlock_acc);
-    if (!account)
-        goto clear;
-    if (account->worker_count == 1)
+    for (int idx = 0; idx < 2; ++idx)
     {
-        account_count--;
-        pool_stats.connected_accounts--;
-        if (upstream_event)
-            upstream_send_account_disconnect();
-        pthread_rwlock_wrlock(&rwlock_acc);
-        HASH_DEL(accounts, account);
-        pthread_rwlock_unlock(&rwlock_acc);
-        gbag_put(bag_accounts, account);
+        if (!account[idx])
+            continue;
+        if (account[idx]->worker_count == 1)
+        {
+            account_count--;
+            if (idx == 0)
+                pool_stats.connected_accounts--;
+            else
+                pool_stats.aux_connected_accounts--;
+            if (upstream_event)
+                upstream_send_account_disconnect();
+            pthread_rwlock_wrlock(&rwlock_acc);
+            HASH_DEL(accounts, account[idx]);
+            pthread_rwlock_unlock(&rwlock_acc);
+            gbag_put(bag_accounts, account[idx]);
+        }
+        else if (account[idx]->worker_count > 1)
+            account[idx]->worker_count--;
     }
-    else if (account->worker_count > 1)
-        account->worker_count--;
 clear:
     client_clear_jobs(client);
     pthread_rwlock_wrlock(&rwlock_cfd);
@@ -3014,22 +3239,64 @@ miner_on_login(json_object *message, client_t *client)
         }
     }
 
-    const char *address = json_object_get_string(login);
+    const char *addresses = json_object_get_string(login);
+    char *buf = NULL;
+    const char *address = NULL, *aux_address = NULL;
+    const char *sep = strchr(addresses, '/');
+    if (sep)
+    {
+      buf = alloca(sep - addresses + 1);
+      memcpy(buf, addresses, sep - addresses);
+      buf[sep - addresses] = 0;
+      address = buf;
+      aux_address = sep + 1;
+      if (address[0] == 'T')
+      {
+        const char *tmp = address;
+        address = aux_address;
+        aux_address = tmp;
+      }
+    }
+    else
+    {
+      if (addresses[0] == 'T')
+          aux_address = addresses;
+      else
+          address = addresses;
+    }
+
+    if (!address && !aux_address)
+    {
+        send_validation_error(client,
+                "Missing Monero and Aux address");
+        return;
+    }
+
     uint8_t nt = 0;
-    uint64_t pf = 0;
-    if (parse_address(address, &pf, &nt, NULL))
+    if (address)
     {
-        send_validation_error(client, "Invalid address");
-        return;
+        uint64_t pf = 0;
+        if (parse_address(address, &pf, &nt, NULL))
+        {
+            send_validation_error(client, "Invalid Monero address");
+            return;
+        }
+        if (nt != nettype)
+        {
+            send_validation_error(client, "Invalid address network type");
+            return;
+        }
+        if (is_integrated(pf))
+        {
+            send_validation_error(client, "Monero integrated addresses are not supported");
+            return;
+        }
     }
-    if (nt != nettype)
+
+    if (aux_address && parse_aux_address(aux_address, NULL, NULL, NULL))
     {
-        send_validation_error(client, "Invalid address network type");
-        return;
-    }
-    if (is_integrated(pf))
-    {
-        send_validation_error(client, "Invalid address type");
+        send_validation_error(client,
+                "Invalid aux address");
         return;
     }
 
@@ -3060,31 +3327,62 @@ miner_on_login(json_object *message, client_t *client)
         return;
     }
 
-    strncpy(client->address, address, sizeof(client->address)-1);
+    strncpy(client->address, address ? address : "", sizeof(client->address)-1);
+    strncpy(client->aux_address, aux_address ? aux_address : "", sizeof(client->aux_address)-1);
     strncpy(client->worker_id, worker_id, sizeof(client->worker_id)-1);
 
-    account_t *account = NULL;
+    account_t *account[2] = {NULL, NULL};
     pthread_rwlock_rdlock(&rwlock_acc);
-    HASH_FIND_STR(accounts, client->address, account);
+    if (client->address[0])
+        HASH_FIND_STR(accounts, client->address, account[0]);
+    if (client->address[1])
+        HASH_FIND_STR(accounts, client->aux_address, account[1]);
     pthread_rwlock_unlock(&rwlock_acc);
-    if (!account)
+    if (client->address[0])
     {
-        account_count++;
-        if (!client->downstream)
-            pool_stats.connected_accounts++;
-        if (upstream_event)
-            upstream_send_account_connect(1);
-        account = gbag_get(bag_accounts);
-        strncpy(account->address, address, sizeof(account->address)-1);
-        account->worker_count = 1;
-        account->connected_since = time(NULL);
-        account->hashes = 0;
-        pthread_rwlock_wrlock(&rwlock_acc);
-        HASH_ADD_STR(accounts, address, account);
-        pthread_rwlock_unlock(&rwlock_acc);
+        if (!account[0])
+        {
+            account_count++;
+            if (!client->downstream)
+                pool_stats.connected_accounts++;
+            if (upstream_event)
+                upstream_send_account_connect(1);
+            account[0] = gbag_get(bag_accounts);
+            strncpy(account[0]->address, client->address, sizeof(account[0]->address));
+            account[0]->address[sizeof(account[0]->address) - 1] = 0;
+            account[0]->worker_count = 1;
+            account[0]->connected_since = time(NULL);
+            account[0]->hashes = 0;
+            pthread_rwlock_wrlock(&rwlock_acc);
+            HASH_ADD_STR(accounts, address, account[0]);
+            pthread_rwlock_unlock(&rwlock_acc);
+        }
+        else
+            account[0]->worker_count++;
     }
-    else
-        account->worker_count++;
+
+    if (client->aux_address[0])
+    {
+        if (!account[1])
+        {
+            account_count++;
+            if (!client->downstream)
+                pool_stats.aux_connected_accounts++;
+            if (upstream_event)
+                upstream_send_account_connect(1);
+            account[1] = gbag_get(bag_accounts);
+            strncpy(account[1]->address, client->aux_address, sizeof(account[1]->address));
+            account[1]->address[sizeof(account[1]->address) - 1] = 0;
+            account[1]->worker_count = 1;
+            account[1]->connected_since = time(NULL);
+            account[1]->hashes = 0;
+            pthread_rwlock_wrlock(&rwlock_acc);
+            HASH_ADD_STR(accounts, address, account[1]);
+            pthread_rwlock_unlock(&rwlock_acc);
+        }
+        else
+            account[1]->worker_count++;
+    }
 
     uuid_t cid;
     uuid_generate(cid);
@@ -3202,19 +3500,6 @@ miner_on_submit(json_object *message, client_t *client)
         return;
     }
     const uint32_t result_nonce = ntohl(uli);
-
-    json_object *diff_object;
-    const char *diff_string = NULL;
-    if (json_object_object_get_ex(params, "diff", &diff_object) && json_object_is_type(diff_object, json_type_string))
-    {
-        nptr = json_object_get_string(diff_object);
-        errno = 0;
-        uli = strtoul(nptr, &endptr, 16);
-        if (errno == 0 && nptr != endptr)
-        {
-            diff_string = nptr;
-        }
-    }
 
     const char *result_hex = json_object_get_string(result);
     if (strlen(result_hex) != 64)
@@ -3411,16 +3696,26 @@ post_hash:
     BN_free(rh);
 
     /* Process share */
-    account_t *account = NULL;
+    account_t *account[2] = { NULL, NULL };
     pthread_rwlock_rdlock(&rwlock_acc);
-    HASH_FIND_STR(accounts, client->address, account);
+    HASH_FIND_STR(accounts, client->address, account[0]);
+    HASH_FIND_STR(accounts, client->aux_address, account[1]);
     client->hashes += job->target;
     client->hr_stats.diff_since += job->target;
-    account->hashes += job->target;
-    account->hr_stats.diff_since += job->target;
     hr_update(&client->hr_stats);
+    if (account[0])
+    {
+      account[0]->hashes += job->target;
+      account[0]->hr_stats.diff_since += job->target;
+      hr_update(&account[0]->hr_stats);
+    }
+    if (account[1])
+    {
+      account[1]->hashes += job->target;
+      account[1]->hr_stats.diff_since += job->target;
+      hr_update(&account[1]->hr_stats);
+    }
     /* TODO: account hr should be called less freq */
-    hr_update(&account->hr_stats);
     pthread_rwlock_unlock(&rwlock_acc);
     time_t now = time(NULL);
     bool can_store = true;
@@ -3454,7 +3749,9 @@ post_hash:
         b->timestamp = now;
         if (upstream_event)
             upstream_send_client_block(b);
-        rpc_request_with_header(pool_base, body, cb, "X-Hash-Difficulty", diff_string);
+        char diff[32];
+        snprintf(diff, sizeof(diff), "%lu", BN_get_word(hd));
+        rpc_request_with_header(false, pool_base, body, cb, "X-Hash-Difficulty", diff);
         free(block_hex);
     }
     else if (BN_cmp(hd, jd) < 0)
@@ -3480,12 +3777,25 @@ post_hash:
         share_t share = {0,0,{0},0};
         share.height = bt->height;
         share.difficulty = job->target;
-        strncpy(share.address, client->address, sizeof(share.address)-1);
+        strncpy(share.address, client->aux_address, sizeof(share.address));
+        share.address[sizeof(share.address) - 1] = 0;
         share.timestamp = now;
         if (!upstream_event)
+        {
             pool_stats.round_hashes += share.difficulty;
-        log_debug("Storing share with difficulty: %"PRIu64, share.difficulty);
-        int rc = store_share(share.height, &share);
+            pool_stats.aux_round_hashes += share.difficulty;
+        }
+        log_debug("Storing share with difficulty: %"PRIu64" for '%s' and '%s'", share.difficulty, client->address, client->aux_address);
+        block_t *top = bstack_top(bsh[1]);
+        share.height = top->height;
+        int rc = store_share(true, share.height, &share);
+        if (rc != 0)
+            log_warn("Failed to store share: %s", mdb_strerror(rc));
+        strncpy(share.address, client->address, sizeof(share.address));
+        share.address[sizeof(share.address) - 1] = 0;
+        top = bstack_top(bsh[0]);
+        share.height = top->height;
+        rc = store_share(false, share.height, &share);
         if (rc != 0)
             log_warn("Failed to store share: %s", mdb_strerror(rc));
         char body[STATUS_BODY_MAX] = {0};
@@ -3783,8 +4093,9 @@ listener_on_accept(evutil_socket_t listener, short event, void *arg)
     bufferevent_setwatermark(bev, EV_READ, 0, MAX_LINE);
     const client_t *c = client_add(fd, &ss, bev, base == trusted_base);
     log_info("New %s [%s:%d] connected", type, c->host, c->port);
-    log_info("Pool accounts: %d, workers: %d, hashrate: %"PRIu64,
+    log_info("Pool accounts: %d/%d, workers: %d, hashrate: %"PRIu64,
             pool_stats.connected_accounts,
+            pool_stats.aux_connected_accounts,
             gbag_used(bag_clients),
             pool_stats.pool_hashrate);
     bufferevent_enable(bev, EV_READ|EV_WRITE);
@@ -3805,6 +4116,8 @@ read_config(const char *config_file)
     /* Start with some defaults for any missing... */
     strcpy(config.rpc_host, "127.0.0.1");
     config.rpc_port = 18081;
+    strcpy(config.aux_rpc_host, "127.0.0.1");
+    config.aux_rpc_port = 18881;
     config.rpc_timeout = 15;
     config.idle_timeout = 150;
     config.pool_start_diff = 1000;
@@ -3813,6 +4126,7 @@ read_config(const char *config_file)
     config.retarget_ratio = 0.55;
     config.pool_fee = 0.01;
     config.payment_threshold = 0.33;
+    config.aux_payment_threshold = 10;
     strcpy(config.pool_listen, "0.0.0.0");
     config.pool_port = 4242;
     config.pool_ssl_port = 0;
@@ -3829,6 +4143,8 @@ read_config(const char *config_file)
     memset(config.aux_chain_name, 0, sizeof(config.aux_chain_name));
     memset(config.main_chain_genesis, 0, sizeof(config.main_chain_genesis));
     memset(config.main_chain_name, 0, sizeof(config.main_chain_name));
+    config.coin = 1000000000000;
+    config.aux_coin = 1000000000000;
 
     char path[MAX_PATH] = {0};
     if (config_file)
@@ -3902,6 +4218,14 @@ read_config(const char *config_file)
         {
             strncpy(config.rpc_host, val, sizeof(config.rpc_host)-1);
         }
+        else if (strcmp(key, "aux-rpc-port") == 0)
+        {
+            config.aux_rpc_port = atoi(val);
+        }
+        else if (strcmp(key, "aux-rpc-host") == 0)
+        {
+            strncpy(config.aux_rpc_host, val, sizeof(config.aux_rpc_host)-1);
+        }
         else if (strcmp(key, "rpc-port") == 0)
         {
             config.rpc_port = atoi(val);
@@ -3913,6 +4237,14 @@ read_config(const char *config_file)
         else if (strcmp(key, "wallet-rpc-port") == 0)
         {
             config.wallet_rpc_port = atoi(val);
+        }
+        else if (strcmp(key, "aux-wallet-rpc-host") == 0)
+        {
+            strncpy(config.aux_wallet_rpc_host, val, sizeof(config.aux_wallet_rpc_host)-1);
+        }
+        else if (strcmp(key, "aux-wallet-rpc-port") == 0)
+        {
+            config.aux_wallet_rpc_port = atoi(val);
         }
         else if (strcmp(key, "rpc-timeout") == 0)
         {
@@ -3946,6 +4278,10 @@ read_config(const char *config_file)
         else if (strcmp(key, "payment-threshold") == 0)
         {
             config.payment_threshold = atof(val);
+        }
+        else if (strcmp(key, "aux-payment-threshold") == 0)
+        {
+            config.aux_payment_threshold = atof(val);
         }
         else if (strcmp(key, "share-mul") == 0)
         {
@@ -4060,6 +4396,22 @@ read_config(const char *config_file)
         {
             strcpy(config.main_chain_name, val);
         }
+        else if (strcmp(key, "coin") == 0)
+        {
+            char *endptr = NULL;
+            errno = 0;
+            config.coin = strtoull(val, &endptr, 10);
+            if (errno || (endptr && *endptr) || !config.coin)
+                log_warn("coin is wrong");
+        }
+        else if (strcmp(key, "aux-coin") == 0)
+        {
+            char *endptr = NULL;
+            errno = 0;
+            config.aux_coin = strtoull(val, &endptr, 10);
+            if (errno || (endptr && *endptr) || !config.aux_coin)
+                log_warn("aux-coin is wrong");
+        }
     }
     fclose(fp);
 
@@ -4088,6 +4440,12 @@ read_config(const char *config_file)
     if (!config.wallet_rpc_host[0] || config.wallet_rpc_port == 0)
     {
         log_fatal("Both wallet-rpc-host and wallet-rpc-port need setting. "
+                "Aborting.");
+        exit(-1);
+    }
+    if (!config.aux_wallet_rpc_host[0] || config.aux_wallet_rpc_port == 0)
+    {
+        log_fatal("Both aux-wallet-rpc-host and aux-wallet-rpc-port need setting. "
                 "Aborting.");
         exit(-1);
     }
@@ -4141,6 +4499,8 @@ print_config(void)
         "  webui-port= %u\n"
         "  rpc-host = %s\n"
         "  rpc-port = %u\n"
+        "  aux-rpc-host = %s\n"
+        "  aux-rpc-port = %u\n"
         "  wallet-rpc-host = %s\n"
         "  wallet-rpc-port = %u\n"
         "  rpc-timeout = %u\n"
@@ -4151,6 +4511,7 @@ print_config(void)
         "  pool-fixed-diff = %"PRIu64"\n"
         "  pool-fee = %g\n"
         "  payment-threshold = %g\n"
+        "  aux-payment-threshold = %g\n"
         "  share-mul = %.2f\n"
         "  retarget-time = %u\n"
         "  retarget-ratio = %.2f\n"
@@ -4169,7 +4530,9 @@ print_config(void)
         "  trusted-port = %u\n"
         "  trusted-allowed = %s\n"
         "  upstream-host = %s\n"
-        "  upstream-port = %u\n",
+        "  upstream-port = %u\n"
+        "  coin = %"PRIu64"\n"
+        "  aux-coin = %"PRIu64"\n",
         config.pool_listen,
         config.pool_port,
         config.pool_ssl_port,
@@ -4177,6 +4540,8 @@ print_config(void)
         config.webui_port,
         config.rpc_host,
         config.rpc_port,
+        config.aux_rpc_host,
+        config.aux_rpc_port,
         config.wallet_rpc_host,
         config.wallet_rpc_port,
         config.rpc_timeout,
@@ -4187,6 +4552,7 @@ print_config(void)
         config.pool_fixed_diff,
         config.pool_fee,
         config.payment_threshold,
+        config.aux_payment_threshold,
         config.share_mul,
         config.retarget_time,
         config.retarget_ratio,
@@ -4205,14 +4571,16 @@ print_config(void)
         config.trusted_port,
         display_allowed,
         config.upstream_host,
-        config.upstream_port);
+        config.upstream_port,
+        config.coin,
+        config.aux_coin);
 }
 
 static void
 sigusr1_handler(evutil_socket_t fd, short event, void *arg)
 {
     log_trace("Fetching last block header from signal");
-    fetch_last_block_header();
+    fetch_last_block_headers();
 }
 
 static void
@@ -4372,8 +4740,8 @@ run(void)
         timer_on_120s(-1, EV_TIMEOUT, NULL);
     }
     else
-        fetch_last_block_header();
-    fetch_view_key();
+        fetch_last_block_headers();
+    fetch_view_key(false);
 
     if (abattoir)
     {
@@ -4422,8 +4790,10 @@ cleanup(void)
     if (pool_base)
         event_base_free(pool_base);
     clients_free();
-    if (bsh)
-        bstack_free(bsh);
+    if (bsh[0])
+        bstack_free(bsh[0]);
+    if (bsh[1])
+        bstack_free(bsh[1]);
     if (bst)
         bstack_free(bst);
     database_close();
@@ -4631,7 +5001,8 @@ int main(int argc, char **argv)
 
     bstack_new(&bst, BLOCK_TEMPLATES_MAX, sizeof(block_template_t),
             template_recycle);
-    bstack_new(&bsh, BLOCK_HEADERS_MAX, sizeof(block_t), NULL);
+    bstack_new(&bsh[0], BLOCK_HEADERS_MAX, sizeof(block_t), NULL);
+    bstack_new(&bsh[1], BLOCK_HEADERS_MAX, sizeof(block_t), NULL);
 
     bn_ctx = BN_CTX_new();
     base_diff = NULL;
@@ -4654,6 +5025,9 @@ int main(int argc, char **argv)
     uic.pool_ssl_port = config.pool_ssl_port;
     uic.allow_self_select = !config.disable_self_select;
     uic.payment_threshold = config.payment_threshold;
+    uic.aux_payment_threshold = config.aux_payment_threshold;
+    strncpy(uic.aux_name, config.aux_chain_name, sizeof(uic.aux_name));
+    uic.aux_name[sizeof(uic.aux_name) - 1] = 0;
     if (config.webui_port)
         start_web_ui(&uic);
 
