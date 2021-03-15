@@ -151,7 +151,7 @@ void get_rx_hash(const unsigned char *input, const size_t in_size,
         const uint64_t height)
 {
 #ifdef HAVE_RX
-    static unsigned miners = tools::get_max_concurrency();
+    static unsigned miners = 0;
     uint64_t seed_height = rx_seedheight(height);
     rx_slow_hash(height, seed_height, (const char*)seed_hash,
             (const char*)input, in_size, (char*)output, miners, 0);
