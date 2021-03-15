@@ -182,6 +182,12 @@ typedef struct config_t
     char pool_view_key[64];
     int processes;
     int32_t cull_shares;
+
+    // merge mining
+    char aux_chain_genesis[64];
+    char aux_chain_name[64];
+    char main_chain_genesis[64];
+    char main_chain_name[64];
 } config_t;
 
 typedef struct block_template_t
@@ -1578,8 +1584,8 @@ rpc_on_response(struct evhttp_request *req, void *arg)
 }
 
 static void
-rpc_request(struct event_base *base, const char *body,
-        rpc_callback_t *callback)
+rpc_request_with_header(struct event_base *base, const char *body,
+        rpc_callback_t *callback, const char *extra_header, const char *extra_header_value)
 {
     struct evhttp_connection *con;
     struct evhttp_request *req;
@@ -1596,7 +1602,16 @@ rpc_request(struct event_base *base, const char *body,
     headers = evhttp_request_get_output_headers(req);
     evhttp_add_header(headers, "Content-Type", "application/json");
     evhttp_add_header(headers, "Connection", "close");
+    if (extra_header && extra_header_value)
+        evhttp_add_header(headers, extra_header, extra_header_value);
     evhttp_make_request(con, req, EVHTTP_REQ_POST, RPC_PATH);
+}
+
+static void
+rpc_request(struct event_base *base, const char *body,
+        rpc_callback_t *callback)
+{
+  rpc_request_with_header(base, body, callback, NULL, NULL);
 }
 
 static void
@@ -2007,9 +2022,35 @@ rpc_on_block_submitted(const char* data, rpc_callback_t *callback)
         const char *em = json_object_get_string(message);
         log_warn("Error (%d) with block submission: %s", ec, em);
     }
-    if (!status || strcmp(ss, "OK") != 0)
+    else if (!status || strcmp(ss, "OK") != 0)
     {
         log_warn("Error submitting block: %s", ss);
+    }
+    else
+    {
+      log_trace("Got block submission result: \n%s", data);
+      JSON_GET_OR_WARN(chains, result, json_type_array);
+      if (chains)
+      {
+        struct array_list *al = json_object_get_array(chains);
+        if (al)
+        {
+          log_info("Block successfully submitted to chains:");
+          const size_t len = array_list_length(al);
+          for (size_t i = 0; i < len; ++i)
+          {
+            json_object *j = array_list_get_idx(al, i);
+            if (j && json_object_is_type(j, json_type_string))
+            {
+              const char *genesis = json_object_get_string(j);
+              const char *name = strncmp(genesis, config.aux_chain_genesis, 64) == 0 ? config.aux_chain_name : strncmp(genesis, config.main_chain_genesis, 64) == 0 ? config.main_chain_name : "unknown";
+              log_info("  %s", name);
+            }
+          }
+        }
+        else
+          log_warn("Not an array");
+      }
     }
     pool_stats.pool_blocks_found++;
     block_t *b = (block_t*)callback->data;
@@ -3162,6 +3203,19 @@ miner_on_submit(json_object *message, client_t *client)
     }
     const uint32_t result_nonce = ntohl(uli);
 
+    json_object *diff_object;
+    const char *diff_string = NULL;
+    if (json_object_object_get_ex(params, "diff", &diff_object) && json_object_is_type(diff_object, json_type_string))
+    {
+        nptr = json_object_get_string(diff_object);
+        errno = 0;
+        uli = strtoul(nptr, &endptr, 16);
+        if (errno == 0 && nptr != endptr)
+        {
+            diff_string = nptr;
+        }
+    }
+
     const char *result_hex = json_object_get_string(result);
     if (strlen(result_hex) != 64)
     {
@@ -3400,7 +3454,7 @@ post_hash:
         b->timestamp = now;
         if (upstream_event)
             upstream_send_client_block(b);
-        rpc_request(pool_base, body, cb);
+        rpc_request_with_header(pool_base, body, cb, "X-Hash-Difficulty", diff_string);
         free(block_hex);
     }
     else if (BN_cmp(hd, jd) < 0)
@@ -3771,6 +3825,10 @@ read_config(const char *config_file)
     config.disable_payouts = false;
     strcpy(config.data_dir, "./data");
     config.cull_shares = -1;
+    memset(config.aux_chain_genesis, 0, sizeof(config.aux_chain_genesis));
+    memset(config.aux_chain_name, 0, sizeof(config.aux_chain_name));
+    memset(config.main_chain_genesis, 0, sizeof(config.main_chain_genesis));
+    memset(config.main_chain_name, 0, sizeof(config.main_chain_name));
 
     char path[MAX_PATH] = {0};
     if (config_file)
@@ -3985,6 +4043,22 @@ read_config(const char *config_file)
         else if (strcmp(key, "pool-view-key") == 0 && strlen(val) == 64)
         {
             memcpy(config.pool_view_key, val, 64);
+        }
+        else if (strcmp(key, "aux-chain-genesis") == 0 && strlen(val) == 64)
+        {
+            memcpy(config.aux_chain_genesis, val, 64);
+        }
+        else if (strcmp(key, "aux-chain-name") == 0 && strlen(val) < 64)
+        {
+            strcpy(config.aux_chain_name, val);
+        }
+        else if (strcmp(key, "main-chain-genesis") == 0 && strlen(val) == 64)
+        {
+            memcpy(config.main_chain_genesis, val, 64);
+        }
+        else if (strcmp(key, "main-chain-name") == 0 && strlen(val) < 64)
+        {
+            strcpy(config.main_chain_name, val);
         }
     }
     fclose(fp);
