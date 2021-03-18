@@ -55,10 +55,11 @@
         <p>
           This pool allows you to mine both Townforge and Monero at the same time with no extra energy expenditure.
           <br>
-          You just point your miner (ie, xmrig) to the pool port as you'd do with any other pool. The only difference
+          You just point your miner (eg, <a href="https://github.com/xmrig/xmrig/releases">xmrig</a>)
+          at the pool port as you'd do with any other pool. The only difference
           is that you can append a Townforge address to your Monero address, with a / separator, eg:
-          <pre>xmrig -u 4xxxx/TF1M....</pre>
-          You can also set only a Monero address or only a Townforge address, if you want to mine a single chain.
+          <pre>xmrig --coin monero -o pool.townforge.net:<span id="pool_port"></span> -u 4xxxx/TF1M....</pre>
+          You can also set just a Monero address or just a Townforge address, if you want to mine a single chain.
         </p>
         <p>
           <a href="https://townforge.net/">Townforge</a>
