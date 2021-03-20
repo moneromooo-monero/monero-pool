@@ -3406,6 +3406,8 @@ miner_on_login(json_object *message, client_t *client)
             account[1]->worker_count++;
     }
 
+    log_info("Client login from %s: %s/%s", client->host, client->address, client->aux_address);
+
     uuid_t cid;
     uuid_generate(cid);
     bin_to_hex((const unsigned char*)cid, sizeof(uuid_t),
@@ -3699,7 +3701,7 @@ miner_on_submit(json_object *message, client_t *client)
         char body[ERROR_BODY_MAX] = {0};
         stratum_get_error_body(body, client->json_id, "Invalid share");
         evbuffer_add(output, body, strlen(body));
-        log_debug("Invalid share");
+        log_debug("Invalid share from %s, %s/%s", client->host, client->address, client->aux_address);
         client->bad_shares++;
         free(block);
         free(hashing_blob);
@@ -3782,7 +3784,7 @@ post_hash:
         char body[ERROR_BODY_MAX] = {0};
         stratum_get_error_body(body, client->json_id, "Low difficulty share");
         evbuffer_add(output, body, strlen(body));
-        log_debug("Low difficulty (%lu) share", BN_get_word(jd));
+        log_debug("Low difficulty (%lu) share from %s, %s/%s", BN_get_word(jd), client->host, client->address, client->aux_address);
         client->bad_shares++;
     }
 
@@ -3807,7 +3809,7 @@ post_hash:
             pool_stats.round_hashes += share.difficulty;
             pool_stats.aux_round_hashes += share.difficulty;
         }
-        log_debug("Storing share with difficulty: %"PRIu64" for '%s' and '%s'", share.difficulty, client->address, client->aux_address);
+        log_debug("Storing share with difficulty: %"PRIu64" from %s for '%s' and '%s'", share.difficulty, client->host, client->address, client->aux_address);
         block_t *top = bstack_top(bsh[1]);
         share.height = top->height;
         int rc = store_share(true, share.height, &share);
