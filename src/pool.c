@@ -339,6 +339,7 @@ static account_t *accounts = NULL;
 static gbag_t *bag_accounts;
 static gbag_t *bag_clients;
 static bool abattoir;
+static bool force_new_template = false;
 
 #ifdef HAVE_RX
 extern void rx_stop_mining();
@@ -347,6 +348,8 @@ extern void rx_slow_hash_free_state();
 void rx_stop_mining(){}
 void rx_slow_hash_free_state(){}
 #endif
+
+static void fetch_last_block_headers(void);
 
 #define JSON_GET_OR_ERROR(name, parent, type, client)                \
     json_object *name = NULL;                                        \
@@ -2068,7 +2071,13 @@ rpc_on_last_block_header(bool aux, const char* data, rpc_callback_t *callback)
     uint64_t bh = json_object_get_int64(height);
     bool need_new_template = false;
     block_t *top = bstack_top(bsh[!!aux]);
-    if (top && bh > top->height)
+    if (force_new_template)
+    {
+      log_trace("Forcing new block template");
+      force_new_template = false;
+      need_new_template = true;
+    }
+    else if (top && bh > top->height)
     {
         need_new_template = true;
         block_t *block = bstack_push(bsh[!!aux], NULL);
@@ -2166,6 +2175,8 @@ rpc_on_block_submitted(const char* data, rpc_callback_t *callback)
         int ec = json_object_get_int(code);
         const char *em = json_object_get_string(message);
         log_warn("Error (%d) with block submission: %s", ec, em);
+        force_new_template = true;
+        fetch_last_block_headers();
     }
     else if (!status || strcmp(ss, "OK") != 0)
     {
