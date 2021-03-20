@@ -2439,6 +2439,7 @@ send_payments(bool aux)
     gbag_new(&bag_pay, 25, sizeof(payment_t), 0, 0);
 
     MDB_cursor_op op = MDB_FIRST;
+    unsigned n_destinations = 0;
     while (1)
     {
         MDB_val key;
@@ -2454,11 +2455,18 @@ send_payments(bool aux)
         if (amount < threshold)
             continue;
 
-        log_info("Sending %s payment: %"PRIu64", %.8s", aux ? config.aux_chain_name : config.main_chain_name, amount, address);
+        if (n_destinations < 15)
+        {
+            log_info("Sending %s payment: %"PRIu64", %.8s", aux ? config.aux_chain_name : config.main_chain_name, amount, address);
 
-        payment_t *p = (payment_t*) gbag_get(bag_pay);
-        strncpy(p->address, address, ADDRESS_MAX-1);
-        p->amount = amount;
+            payment_t *p = (payment_t*) gbag_get(bag_pay);
+            strncpy(p->address, address, ADDRESS_MAX-1);
+            p->amount = amount;
+
+            ++n_destinations;
+        }
+        else
+            log_info("Delaying %s payment: %"PRIu64", %.8s", aux ? config.aux_chain_name : config.main_chain_name, amount, address);
     }
     mdb_cursor_close(cursor);
     mdb_txn_abort(txn);
