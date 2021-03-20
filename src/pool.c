@@ -1877,6 +1877,40 @@ rpc_on_block_template(const char* data, rpc_callback_t *callback)
         json_object_put(root);
         return;
     }
+    JSON_GET_OR_WARN(chains, result, json_type_array);
+    pool_stats.aux_block_reward = 0;
+    pool_stats.block_reward = 0;
+    if (chains)
+    {
+      struct array_list *al = json_object_get_array(chains);
+      if (al)
+      {
+        const size_t len = array_list_length(al);
+        for (size_t i = 0; i < len; ++i)
+        {
+          json_object *j = array_list_get_idx(al, i);
+          if (j && json_object_is_type(j, json_type_object))
+          {
+            JSON_GET_OR_WARN(genesis_block, j, json_type_string);
+            JSON_GET_OR_WARN(miner_reward, j, json_type_int);
+            if (genesis_block && miner_reward)
+            {
+              const char *genesis_str = json_object_get_string(genesis_block);
+              if (!strncmp(genesis_str, config.aux_chain_genesis, 64))
+              {
+                pool_stats.aux_block_reward = json_object_get_int64(miner_reward);
+              }
+              else if (!strncmp(genesis_str, config.main_chain_genesis, 64))
+              {
+                pool_stats.block_reward = json_object_get_int64(miner_reward);
+              }
+            }
+          }
+        }
+      }
+      else
+        log_warn("chains is wrong type");
+    }
     pool_stats.last_template_fetched = time(NULL);
     block_template_t *top = (block_template_t*) bstack_push(bst, NULL);
     response_to_block_template(result, top);

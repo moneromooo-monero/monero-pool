@@ -50,6 +50,8 @@ typedef struct pool_stats_t
     time_t last_block_found;
     time_t last_aux_block_found;
     time_t last_template_fetched;
+    uint64_t block_reward;
+    uint64_t aux_block_reward;
 } pool_stats_t;
 
 typedef struct wui_context_t
