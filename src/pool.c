@@ -702,6 +702,22 @@ store_block(bool aux, uint64_t height, block_t *block)
         return rc;
     }
 
+    MDB_val last_key, last_val;
+    rc = mdb_cursor_get(cursor, &last_key, &last_val, MDB_LAST);
+    if (rc == 0)
+    {
+      if (last_key.mv_size == sizeof(height) && *(const uint64_t*)last_key.mv_data == height)
+      {
+        if (last_val.mv_size == sizeof(block_t) && !memcmp(((const block_t*)last_val.mv_data)->hash, block->hash, sizeof(block->hash)))
+        {
+          // already added
+          log_info("Block %64.64s already added at %"PRIu64", not double adding", block->hash, height);
+          mdb_txn_abort(txn);
+          return rc;
+        }
+      }
+    }
+
     MDB_val key = { sizeof(height), (void*)&height };
     MDB_val val = { sizeof(block_t), (void*)block };
     rc = mdb_cursor_put(cursor, &key, &val, MDB_APPENDDUP);
