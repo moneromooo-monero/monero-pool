@@ -3866,8 +3866,6 @@ post_hash:
         share_t share = {0,0,{0},0};
         share.height = bt->height;
         share.difficulty = job->target;
-        strncpy(share.address, client->aux_address, sizeof(share.address));
-        share.address[sizeof(share.address) - 1] = 0;
         share.timestamp = now;
         if (!upstream_event)
         {
@@ -3876,17 +3874,25 @@ post_hash:
         }
         log_debug("Storing share with difficulty: %"PRIu64" from %s for '%s' and '%s'", share.difficulty, client->host, client->address, client->aux_address);
         block_t *top = bstack_top(bsh[1]);
-        share.height = top->height;
-        int rc = store_share(true, share.height, &share);
-        if (rc != 0)
-            log_warn("Failed to store share: %s", mdb_strerror(rc));
-        strncpy(share.address, client->address, sizeof(share.address));
-        share.address[sizeof(share.address) - 1] = 0;
+        if (top)
+        {
+            share.height = top->height;
+            strncpy(share.address, client->aux_address, sizeof(share.address));
+            share.address[sizeof(share.address) - 1] = 0;
+            int rc = store_share(true, share.height, &share);
+            if (rc != 0)
+                log_warn("Failed to store share: %s", mdb_strerror(rc));
+        }
         top = bstack_top(bsh[0]);
-        share.height = top->height;
-        rc = store_share(false, share.height, &share);
-        if (rc != 0)
-            log_warn("Failed to store share: %s", mdb_strerror(rc));
+        if (top)
+        {
+            share.height = top->height;
+            strncpy(share.address, client->address, sizeof(share.address));
+            share.address[sizeof(share.address) - 1] = 0;
+            int rc = store_share(false, share.height, &share);
+            if (rc != 0)
+                log_warn("Failed to store share: %s", mdb_strerror(rc));
+        }
         char body[STATUS_BODY_MAX] = {0};
         stratum_get_status_body(body, client->json_id, "OK");
         evbuffer_add(output, body, strlen(body));
