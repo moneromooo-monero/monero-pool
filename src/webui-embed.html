@@ -4,6 +4,7 @@
         <title>Townforge/Monero merge mining pool</title>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <link rel="stylesheet" href="https://cdn.rawgit.com/Chalarangelo/mini.css/v3.0.1/dist/mini-default.min.css">
         <style>
             body {
                 font-family: "Courier New", Courier, monospace;
@@ -26,6 +27,9 @@
             .miner {
                 display: none;
             }
+            .howto {
+                display: none;
+            }
             #address {
                 min-width: 10ch;
                 max-width: 10ch;
@@ -41,6 +45,16 @@
                 white-space: initial;
                 word-wrap: break-word;
             }
+            .card.miner {
+              --card-back-color: #0094a1;
+              --card-fore-color: #f8f8f8;
+              --card-border-color: #a71a1a;
+            }
+            .poolcol {
+              background: #0094a1;
+              color: #ffffff;
+              padding: 0.4rem;
+            }
         </style>
         <script>
             if (window.trustedTypes && window.trustedTypes.createPolicy) {
@@ -49,79 +63,117 @@
                 });
             }
         </script>
+        <script>
+            function show_hide(id)
+            {
+                var e = document.getElementById(id)
+                if (e.style.display == "none" || e.style.display == "")
+                    e.style.display = "block";
+                else
+                    e.style.display = "none";
+            }
+        </script>
     </head>
     <body>
-        <header>Townforge/Monero Merge Mining Pool</header>
-        <p>
-          Currently in TESTING mode. All Townforge mined here is TESTNET. Pool will restart regularly.
-        </p>
-        <p>
-          This pool allows you to mine both Townforge and Monero at the same time with no extra energy expenditure.
-          <br>
-          You just point your miner (eg, <a href="https://github.com/xmrig/xmrig/releases">xmrig</a>)
-          at the pool port as you'd do with any other pool. The only difference
-          is that you can append a Townforge address to your Monero address, with a / separator, eg:
-          <pre>xmrig --coin monero -o pool.townforge.net:<span id="pool_port"></span> -u 4xxxx/TF1M....</pre>
-          You can also set just a Monero address or just a Townforge address, if you want to mine a single chain.
-        </p>
-        <p>
-          Note that merge mining links your Townforge and Monero addresses. If this is a problem for you, use a
-          subaddress you only use for mining.
-        </p>
-        <p>
-          <a href="https://townforge.net/">Townforge</a>
-          is a fork of Monero, with a builtin multiplayer city building game. All game actions are performed
-          by on chain transactions, making it a fully decentralized game.
-        </p>
-        <table>
-            <tr>
-                <td> <!-- pool -->
-                    <table>
-                        <tr><td><font size="+2">Pool</font></td></tr>
-                        <tr><td>Pool HR: </td><td id="pool_hashrate"></td></tr>
-                        <tr><td>Last template: </td><td id="last_template_fetched"></td></tr>
-                        <tr><td>Pool fee: </td><td id="pool_fee"></td></tr>
-                        <tr><td>Pool port: </td><td id="pool_port"></td></tr>
-                        <tr><td>Pool SSL port: </td><td id="pool_ssl_port"></td></tr>
-                        <tr><td>Allow self-select: </td><td id="allow_self_select"></td></tr>
-                        <tr><td>Payouts: </td><td>PPLNS</td></tr>
-                    </table>
-                </td>
-                <td> <!-- Aux -->
-                    <table>
-                        <tr><td><font size="+2"><span id="aux_name">Aux</span></font></td></tr>
-                        <tr><td>Network HR: </td><td id="aux_network_hashrate"></td></tr>
-                        <tr><td>Network height: </td><td id="aux_network_height"></td></tr>
-                        <tr><td>Block reward: </td><td id="aux_block_reward"></td></tr>
-                        <tr><td>Blocks found: </td><td id="pool_aux_blocks_found"></td></tr>
-                        <tr><td>Last block found: </td><td id="last_aux_block_found"></td></tr>
-                        <tr><td>Round HR: </td><td id="aux_round_hashrate"></td></tr>
-                        <tr><td>Round hashes: </td><td id="aux_round_hashes"></td></tr>
-                        <tr><td>Payment threshold: </td><td id="aux_payment_threshold"></td></tr>
-                        <tr><td>Miners connected: </td><td id="aux_connected_miners"></td></tr>
-                    </table>
-                </td>
-                <td> <!-- Main -->
-                    <table>
-                        <tr><td><font size="+2">Monero</font></td></tr>
-                        <tr><td>Network HR: </td><td id="network_hashrate"></td></tr>
-                        <tr><td>Network height: </td><td id="network_height"></td></tr>
-                        <tr><td>Block reward: </td><td id="block_reward"></td></tr>
-                        <tr><td>Blocks found: </td><td id="pool_blocks_found"></td></tr>
-                        <tr><td>Last block found: </td><td id="last_block_found"></td></tr>
-                        <tr><td>Round HR: </td><td id="round_hashrate"></td></tr>
-                        <tr><td>Round hashes: </td><td id="round_hashes"></td></tr>
-                        <tr><td>Payment threshold: </td><td id="payment_threshold"></td></tr>
-                        <tr><td>Miners connected: </td><td id="connected_miners"></td></tr>
-                    </table>
-                </td>
-            </tr>
-            <tr>
-                <tr><td>Miner address: </td><td id="address" contenteditable="true" colspan=2></td></tr>
-                <tr class="miner"><td>Your HR: </td><td id="miner_hashrate"></td></tr>
-                <tr class="miner"><td>Balance due: </td><td id="miner_balance"></td></tr>
-            </tr>
-        </table>
+        <h1>Townforge/Monero merge mining pool</h1>
+        <div class="card warning fluid">
+          <p class="doc">Currently in TESTING mode. All Townforge mined here is TESTNET. Pool will restart regularly.</p>
+        </div>
+        <div class="card fluid">
+          <p class="doc">
+            <a href="https://townforge.net/">Townforge</a>
+            is a fork of Monero, with a builtin multiplayer city building game. All game actions are performed
+            by on chain transactions, making it a fully decentralized game where you can earn cryptocurrency by playing.
+            3D voxel world on Linux/Windows/Mac.
+          </p>
+        </div>
+        <div class="card fluid">
+          <h3 class="doc button" onclick="js:show_hide('howto')"> >> How to mine ?</h3>
+          <div class="howto" id="howto">
+            <p class="doc">
+            This pool allows you to mine both Townforge and Monero at the same time with no extra energy expenditure.
+            Just point your miner (eg, <a href="https://github.com/xmrig/xmrig/releases">xmrig</a>)
+            at the pool port as you'd do with any other pool. The only difference
+            is that you can append a Townforge address to your Monero address, with a / separator, eg:
+            <pre>xmrig --coin monero -o pool.townforge.net:<span id="pool_port"></span> -u 4xxxx/TF1M....</pre>
+            </p>
+            <p class="doc">You can also set just a Monero address or just a Townforge address, if you want to mine a single chain.</p>
+            <p class="doc">
+              Note that merge mining links your Townforge and Monero addresses. If this is a problem for you, use a
+              subaddress you only use for mining.
+            </p>
+          </div>
+        </div>
+
+
+        <div class="row" style="--universal-padding: 0.25rem">
+            <div class="fluid col-sm">
+                <table class="striped" style="max-height: 8000px; overflow: hidden">
+                    <caption class="poolcol">Pool</caption>
+                    <tbody>
+                        <tr><td data-label="Pool hashrate">Pool hashrate: </td><td id="pool_hashrate"></td></tr>
+                        <tr><td data-label="Last template">Last template: </td><td id="last_template_fetched"></td></tr>
+                        <tr><td data-label="Pool fee">Pool fee: </td><td id="pool_fee"></td></tr>
+                        <tr><td data-label="Pool port">Pool port: </td><td id="pool_port"></td></tr>
+                        <!-- <tr><td data-label="Pool SSL port">Pool SSL port: </td><td id="pool_ssl_port"></td></tr> -->
+                        <!-- <tr><td data-label="Allow self-select">Allow self-select: </td><td id="allow_self_select"></td></tr> -->
+                        <tr><td data-label="Payouts">Payouts: </td><td>PPLNS</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="fluid col-sm">
+                <table class="striped" style="max-height: 8000px; overflow: hidden">
+                    <caption class="poolcol"><span id="aux_name">Aux</span></caption>
+                    <tbody>
+                        <tr><td data-label="Network hashrate">Network hashrate: </td><td id="aux_network_hashrate"></td></tr>
+                        <tr><td data-label="Network height">Network height: </td><td id="aux_network_height"></td></tr>
+                        <tr><td data-label="Block reward">Block reward: </td><td id="aux_block_reward"></td></tr>
+                        <tr><td data-label="Blocks found">Blocks found: </td><td id="pool_aux_blocks_found"></td></tr>
+                        <tr><td data-label="Last block found">Last block found: </td><td id="last_aux_block_found"></td></tr>
+                        <!-- <tr><td data-label="Round hashrate">Round hashrate: </td><td id="aux_round_hashrate"></td></tr> -->
+                        <tr><td data-label="Round hashes">Round hashes: </td><td id="aux_round_hashes"></td></tr>
+                        <tr><td data-label="Payment threshold">Payment threshold: </td><td id="aux_payment_threshold"></td></tr>
+                        <tr><td data-label="Miners connected">Miners connected: </td><td id="aux_connected_miners"></td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="fluid col-sm">
+                <table class="striped" style="max-height: 8000px; overflow: hidden">
+                    <caption class="poolcol">Monero</caption>
+                    <tbody>
+                        <tr><td data-label="Network hashrate">Network hashrate: </td><td id="network_hashrate"></td></tr>
+                        <tr><td data-label="Network height">Network height: </td><td id="network_height"></td></tr>
+                        <tr><td data-label="Block reward">Block reward: </td><td id="block_reward"></td></tr>
+                        <tr><td data-label="Blocks found">Blocks found: </td><td id="pool_blocks_found"></td></tr>
+                        <tr><td data-label="Last block found">Last block found: </td><td id="last_block_found"></td></tr>
+                        <!-- <tr><td data-label="Round hashrate">Round hashrate: </td><td id="round_hashrate"></td></tr> -->
+                        <tr><td data-label="Round hashes">Round hashes: </td><td id="round_hashes"></td></tr>
+                        <tr><td data-label="Payment threshold">Payment threshold: </td><td id="payment_threshold"></td></tr>
+                        <tr><td data-label="Miners connected">Miners connected: </td><td id="connected_miners"></td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="input-group fluid">
+            <label for="username">Your address:</label>
+            <input type="text" id="Username" placeholder="Townforge or Monero address" onKeyPress="if (event.keyCode == 13) js:set_miner_address(this); "/>
+        </div>
+        <div class="row">
+            <div class="card small miner">
+                <div class="section">
+                    <h4 class="doc">Hash rate</h4>
+                    <p class="doc"> <span id="miner_hashrate"> </span> </p>
+                </div>
+            </div>
+            <div class="card small miner">
+                <div class="section">
+                    <h4 class="doc">Pending balance</h4>
+                    <p class="doc"> <span id="miner_balance"> </span></p>
+                </div>
+            </div>
+        </div>
+
         <small><a href="https://github.com/jtgrassie/monero-pool">https://github.com/jtgrassie/monero-pool</a></small>
         <script>
             function format_last_time(last)
@@ -198,7 +250,7 @@
                 return format_hashrate(round_hashes / diff);
             }
 
-            var wf = document.querySelector("#address");
+            var wf = document.querySelector("#Username");
             var xhr = new XMLHttpRequest();
             var rhr = document.querySelector("#round_hashrate");
             var rhr2 = document.querySelector("#aux_round_hashrate");
@@ -224,21 +276,25 @@
                         el.innerHTML = stats[e] == 1 ? "Yes" : "No";
                     else if (e == "round_hashes")
                     {
-                        el.innerHTML = max_precision(stats[e]*100 /
-                            stats["network_difficulty"], 1) + "%" +
-                            " (" + format_hashes(stats[e]) + " / " +
-                            format_hashes(stats["network_difficulty"]) + ")";
-                        rhr.innerHTML = format_round_hashrate(
-                            stats["round_hashes"], stats["last_block_found"]);
+                        if (stats["aux_network_difficulty"] != 0)
+                        {
+                            el.innerHTML = max_precision(stats[e]*100 /
+                                stats["network_difficulty"], 1) + "%";
+                            if (rhr)
+                                rhr.innerHTML = format_round_hashrate(
+                                    stats["round_hashes"], stats["last_block_found"]);
+                        }
                     }
                     else if (e == "aux_round_hashes")
                     {
-                        el.innerHTML = max_precision(stats[e]*100 /
-                            stats["aux_network_difficulty"], 1) + "%" +
-                            " (" + format_hashes(stats[e]) + " / " +
-                            format_hashes(stats["aux_network_difficulty"]) + ")";
-                        rhr2.innerHTML = format_round_hashrate(
-                            stats["aux_round_hashes"], stats["last_aux_block_found"]);
+                        if (stats["aux_network_difficulty"] != 0)
+                        {
+                            el.innerHTML = max_precision(stats[e]*100 /
+                                stats["aux_network_difficulty"], 1) + "%";
+                            if (rhr2)
+                                rhr2.innerHTML = format_round_hashrate(
+                                    stats["aux_round_hashes"], stats["last_aux_block_found"]);
+                        }
                     }
                     else if (e == "pool_ssl_port")
                     {
@@ -252,18 +308,28 @@
                 }
             };
 
-            wf.onblur = function(e)
+            function set_miner_address(e)
             {
                 var d = new Date();
                 d.setTime(d.getTime() + (86400 * 365 * 1000));
-                document.cookie = "wa=" + this.innerText +
+                document.cookie = "wa=" + e.value +
                     ";expires=" + d.toGMTString();
                 window.location.reload();
                 return false;
             };
 
+            wf.onblur = function(e)
+            {
+                set_miner_address(wf);
+            }
+
             window.onload = function()
             {
+                var m = document.querySelectorAll(".miner");
+                for (var i=0; i<m.length; i++)
+                {
+                    m[i].style = "display: none;";
+                }
                 var jar = {};
                 for (var kv, i=0, kvs=document.cookie.split(/\s*;\s*/); i<kvs.length; i++)
                 {
@@ -275,15 +341,14 @@
                         } catch (e) {}
                     }
                 }
-                if (jar.wa &&
+                if (jar.wa !== "undefined" && jar.wa &&
                     /^[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]+$/.test(jar.wa))
                 {
-                    var m = document.querySelectorAll(".miner");
                     for (var i=0; i<m.length; i++)
                     {
-                        m[i].style = "display: table-row;";
+                        m[i].style = "display: block;";
                     }
-                    wf.innerText = jar.wa;
+                    wf.value = jar.wa;
                 }
                 var get_stats = function()
                 {
