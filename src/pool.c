@@ -746,6 +746,21 @@ bail:
     pthread_rwlock_unlock(&rwlock_acc);
 }
 
+void
+get_miner_stats(const char *address, double *avg, int *workers, uint64_t *hashes)
+{
+    account_t *account = NULL;
+    pthread_rwlock_rdlock(&rwlock_acc);
+    HASH_FIND_STR(accounts, address, account);
+    if (!account)
+        goto bail;
+    memcpy(avg, account->hr_stats.avg, sizeof(account->hr_stats.avg));
+    *workers = account->worker_count;
+    *hashes = account->hashes;
+bail:
+    pthread_rwlock_unlock(&rwlock_acc);
+}
+
 uint64_t
 account_balance(const char *address)
 {

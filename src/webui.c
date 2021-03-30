@@ -81,6 +81,8 @@ send_json_stats(struct evhttp_request *req, void *arg)
     unsigned ss = context->allow_self_select;
     double mh[6] = {0};
     double mb = 0.0;
+    int mw = 0;
+    uint64_t mhashes = 0;
 
     hdrs_in = evhttp_request_get_input_headers(req);
     const char *cookies = evhttp_find_header(hdrs_in, "Cookie");
@@ -90,7 +92,7 @@ send_json_stats(struct evhttp_request *req, void *arg)
         if (wa)
         {
             wa += 3;
-            account_hr(mh, wa);
+            get_miner_stats(wa, mh, &mw, &mhashes);
             uint64_t balance = account_balance(wa);
             if (wa[0] == 'T')
                 mb = (double) balance / 100000000.0;
@@ -129,6 +131,8 @@ send_json_stats(struct evhttp_request *req, void *arg)
                     "%"PRIu64",%"PRIu64",%"PRIu64","
                     "%"PRIu64",%"PRIu64",%"PRIu64"],"
             "\"miner_balance\":%.8f,"
+            "\"miner_workers\":%d,"
+            "\"miner_hashes\":%"PRIu64","
             "\"aux_name\":\"%s\""
             "}", ph, rh, rh2, nh, nd, height, nh2, nd2, height2, ltf, lbf, lbf2, pbf, pbf2,
             context->payment_threshold, context->aux_payment_threshold, context->pool_fee,
@@ -137,7 +141,7 @@ send_json_stats(struct evhttp_request *req, void *arg)
             ss, context->pool_stats->connected_accounts, context->pool_stats->aux_connected_accounts,
             (uint64_t)mh[0],
             (uint64_t)mh[0], (uint64_t)mh[1], (uint64_t)mh[2],
-            (uint64_t)mh[3], (uint64_t)mh[4], (uint64_t)mh[5], mb,
+            (uint64_t)mh[3], (uint64_t)mh[4], (uint64_t)mh[5], mb, mw, mhashes,
             context->aux_name);
     hdrs_out = evhttp_request_get_output_headers(req);
     evhttp_add_header(hdrs_out, "Content-Type", "application/json");

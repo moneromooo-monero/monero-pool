@@ -34,5 +34,6 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 void account_hr(double *avg, const char *address);
 uint64_t account_balance(const char *address);
+void get_miner_stats(const char *address, double *avg, int *workers, uint64_t *hashes);
 
 #endif
