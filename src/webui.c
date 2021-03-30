@@ -37,6 +37,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <stdlib.h>
 #include <stdio.h>
 
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+
 #include <pthread.h>
 
 #include <event2/event.h>
@@ -149,6 +153,25 @@ send_json_stats(struct evhttp_request *req, void *arg)
 }
 
 static void
+send_css(struct evhttp_request *req, void *arg)
+{
+    struct evbuffer *buf = evhttp_request_get_output_buffer(req);
+    struct evkeyvalq *hdrs_out = NULL;
+    hdrs_out = evhttp_request_get_output_headers(req);
+
+    int fd = open("mini-default.min.css", 0);
+    if (fd < 0)
+    {
+        evhttp_send_reply(req, HTTP_NOTFOUND, "Not found", buf);
+        return;
+    }
+
+    evbuffer_add_file(buf, fd, 0, -1);
+    evhttp_add_header(hdrs_out, "Content-Type", "text/css");
+    evhttp_send_reply(req, HTTP_OK, "OK", buf);
+}
+
+static void
 process_request(struct evhttp_request *req, void *arg)
 {
     const char *url = evhttp_request_get_uri(req);
@@ -158,6 +181,11 @@ process_request(struct evhttp_request *req, void *arg)
     if (strstr(url, "/stats") != NULL)
     {
         send_json_stats(req, arg);
+        return;
+    }
+    if (strstr(url, "/mini-default.min.css") != NULL)
+    {
+        send_css(req, arg);
         return;
     }
 
