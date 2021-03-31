@@ -190,7 +190,7 @@
         <script>
             function format_last_time(last)
             {
-                var now = new Date().getTime() / 1000;
+                var now = parseInt(new Date().getTime() / 1000);
                 var diff = now - last;
                 var v;
                 if (last == 0)
