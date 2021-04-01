@@ -88,8 +88,8 @@
           </p>
         </div>
         <div class="card fluid">
-          <h3 class="doc button" onclick="js:show_hide('howto')"> >> How to mine ?</h3>
-          <div class="howto" id="howto">
+          <h3 class="doc button" onclick="js:show_hide('howto-mine')"> >> How to mine ?</h3>
+          <div class="howto" id="howto-mine">
             <p class="doc">
             This pool allows you to mine both Townforge and Monero at the same time with no extra energy expenditure.
             Just point your miner (eg, <a href="https://github.com/xmrig/xmrig/releases">xmrig</a>)
@@ -99,9 +99,22 @@
             </p>
             <p class="doc">You can also set just a Monero address or just a Townforge address, if you want to mine a single chain.</p>
             <p class="doc">
+              <small>
               Note that merge mining links your Townforge and Monero addresses. If this is a problem for you, use a
               subaddress you only use for mining.
+              </small>
             </p>
+            <div class="card fluid">
+              <h3 class="doc button" onclick="js:show_hide('howto-address')"> >> How to create a Townforge address ?</h3>
+              <div class="howto" id="howto-address">
+                  <p class="doc">
+                  <a href="https://townforge.net/download">Download</a> and extract the game for your platform (or build from <a href="https://git.townforge.net/">source</a>).
+                  </p>
+                  <p class="doc">
+                  Run the game, then click on "No wallet ?" on the main screen. Select a filename for your new wallet, and a password. You now have a Townforge wallet address.
+                  </p>
+              </div>
+            </div>
           </div>
         </div>
 
