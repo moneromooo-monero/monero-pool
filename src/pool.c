@@ -3815,7 +3815,7 @@ post_hash:
     if (BN_cmp(hd, bd) >= 0)
     {
         /* Yay! Mined a block so submit to network */
-        log_info("+++ MINED A BLOCK +++");
+        log_info("+++ MINED A BLOCK +++ (%s, %s/%s)", client->host, client->address, client->aux_address);
         char *block_hex = calloc((bin_size << 1)+1, sizeof(char));
         bin_to_hex(block, bin_size, block_hex, bin_size << 1);
         char body[RPC_BODY_MAX] = {0};
