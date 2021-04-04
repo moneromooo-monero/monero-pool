@@ -382,7 +382,7 @@ hr_update(hr_stats_t *stats)
        Update some time decayed EMA hashrates.
     */
     time_t now = time(NULL);
-    double t = difftime(now, stats->last_calc);
+    double t = difftime(now, stats->last_calc) + 0.5;
     if (t <= 0)
         return;
     double h = stats->diff_since;
