@@ -72,6 +72,9 @@
             .extra_fee_help:hover .tooltiptext {
                 visibility: visible;
             }
+            .indent {
+              padding-left: calc(2 * var(--universal-margin));
+            }
         </style>
         <script>
             if (window.trustedTypes && window.trustedTypes.createPolicy) {
@@ -105,23 +108,28 @@
           </p>
         </div>
         <div class="card fluid">
-          <h3 class="doc button" onclick="js:show_hide('howto-mine')"> >> How to mine ?</h3>
-          <div class="howto" id="howto-mine">
-            <p class="doc">
-            This pool allows you to mine both Townforge and Monero at the same time with no extra energy expenditure.
-            Just point your miner (eg, <a href="https://github.com/xmrig/xmrig/releases">xmrig</a>)
-            at the pool port as you'd do with any other pool. The only difference
-            is that you can append a Townforge address to your Monero address, with a / separator, eg:
-            <pre>xmrig --coin monero -o pool.townforge.net:<span id="pool_port"></span> -u 4xxxx/TF1M....</pre>
-            </p>
-            <p class="doc">You can also set just a Monero address or just a Townforge address, if you want to mine a single chain.</p>
-            <p class="doc">
-              <small>
-              Note that merge mining links your Townforge and Monero addresses. If this is a problem for you, use a
-              subaddress you only use for mining.
-              </small>
-            </p>
-            <div class="card fluid">
+          <h3 class="doc button" onclick="js:show_hide('help')"> >> Help</h3>
+          <div class="howto" id="help">
+            <div class="card fluid indent">
+              <h3 class="doc button" onclick="js:show_hide('howto-mine')"> >> How to mine ?</h3>
+              <div class="howto" id="howto-mine">
+                <p class="doc">
+                This pool allows you to mine both Townforge and Monero at the same time with no extra energy expenditure.
+                Just point your miner (eg, <a href="https://github.com/xmrig/xmrig/releases">xmrig</a>)
+                at the pool port as you'd do with any other pool. The only difference
+                is that you can append a Townforge address to your Monero address, with a / separator, eg:
+                <pre>xmrig --coin monero -o pool.townforge.net:<span id="pool_port"></span> -u 4xxxx/TF1M....</pre>
+                </p>
+                <p class="doc">You can also set just a Monero address or just a Townforge address, if you want to mine a single chain.</p>
+                <p class="doc">
+                  <small>
+                  Note that merge mining links your Townforge and Monero addresses. If this is a problem for you, use a
+                  subaddress you only use for mining.
+                  </small>
+                </p>
+              </div>
+            </div>
+            <div class="card fluid indent">
               <h3 class="doc button" onclick="js:show_hide('howto-address')"> >> How to create a Townforge address ?</h3>
               <div class="howto" id="howto-address">
                   <p class="doc">
