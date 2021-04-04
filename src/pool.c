@@ -1117,7 +1117,7 @@ update_pool_hr(void)
     uint64_t hr = 0;
     client_t *c = (client_t*)gbag_first(bag_clients);
     while ((c = gbag_next(bag_clients, 0)))
-        hr += (uint64_t) c->hr_stats.avg[0];
+        hr += (uint64_t) c->hr_stats.avg[1];
     log_debug("Pool hashrate: %"PRIu64, hr);
     if (upstream_event)
         return;
