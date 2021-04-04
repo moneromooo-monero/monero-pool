@@ -140,6 +140,19 @@
                   </p>
               </div>
             </div>
+            <div class="card fluid indent">
+              <h3 class="doc button" onclick="js:show_hide('howto-variable-fee')"> >> How does the variable fee work ?</h3>
+              <div class="howto" id="howto-variable-fee">
+                  <p class="doc">
+                  In order to disincentivize a single pool having a majority of the network hash rate, the pool fee will increase when the share of the pool
+                  grows beyond 40% of that network's hash rate, up to a maximum of 2% if the pool reaches 100% of the network hash rate.
+                  </p>
+                  <p class="doc">
+                  The pool's share of the network hash rate is determined by how many of the last 60 Townforge or Monero blocks were found by the pool,
+                  and Townforge and Monero have independent pool fees.
+                  </p>
+              </div>
+            </div>
           </div>
         </div>
 
