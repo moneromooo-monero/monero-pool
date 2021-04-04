@@ -164,6 +164,8 @@ typedef struct config_t
     uint32_t retarget_time;
     double retarget_ratio;
     double pool_fee;
+    double pool_fee_increase_threshold;
+    double pool_max_fee;
     double payment_threshold;
     double aux_payment_threshold;
     char pool_listen[MAX_HOST];
@@ -340,6 +342,7 @@ static gbag_t *bag_accounts;
 static gbag_t *bag_clients;
 static bool abattoir;
 static bool force_new_template = false;
+static double effective_pool_fee[2] = { 0.0, 0.0f };
 
 #ifdef HAVE_RX
 extern void rx_stop_mining();
@@ -712,6 +715,10 @@ store_block(bool aux, uint64_t height, block_t *block)
         {
           // already added
           log_info("Block %64.64s already added at %"PRIu64", not double adding", block->hash, height);
+          if (aux)
+            pool_stats.pool_aux_blocks_found--;
+          else
+            pool_stats.pool_blocks_found--;
           mdb_txn_abort(txn);
           return rc;
         }
@@ -935,7 +942,7 @@ payout_block(bool aux, block_t *block, MDB_txn *parent)
         if (total_paid + amount > block->reward)
             amount = block->reward - total_paid;
         total_paid += amount;
-        uint64_t fee = amount * config.pool_fee;
+        uint64_t fee = amount * effective_pool_fee[aux];
         amount -= fee;
         if (fee > 0 && config.pool_fee_wallet[0])
         {
@@ -1660,6 +1667,10 @@ rpc_on_response(struct evhttp_request *req, void *arg)
     {
         log_error("Request failure. Aborting.");
         rpc_callback_free(callback);
+
+        log_info("Upstream might have restarted, fetching new block template");
+        force_new_template = true;
+        fetch_last_block_headers();
         return;
     }
 
@@ -1882,6 +1893,76 @@ aux_rpc_on_block_headers_range(const char* data, rpc_callback_t *callback)
   rpc_on_block_headers_range_mux(true, data, callback);
 }
 
+static int
+update_pool_fee(bool aux, uint64_t height)
+{
+    /*
+      Loop stored blocks < height - 60
+      If block locked & not orphaned, payout
+    */
+    int rc = 0;
+    char *err = NULL;
+    MDB_txn *txn = NULL;
+    MDB_cursor *cursor = NULL;
+    if ((rc = mdb_txn_begin(env, NULL, MDB_RDONLY, &txn)) != 0)
+    {
+        err = mdb_strerror(rc);
+        log_error("%s", err);
+        return rc;
+    }
+    if ((rc = mdb_cursor_open(txn, db_blocks[!!aux], &cursor)) != 0)
+    {
+        err = mdb_strerror(rc);
+        log_error("%s", err);
+        mdb_txn_abort(txn);
+        return rc;
+    }
+
+    unsigned blocks_in_last_60 = 0;
+    MDB_cursor_op op = MDB_LAST;
+    while (1)
+    {
+        MDB_val key;
+        MDB_val val;
+        rc = mdb_cursor_get(cursor, &key, &val, op);
+        op = MDB_PREV;
+        if (rc != 0 && rc != MDB_NOTFOUND)
+        {
+            err = mdb_strerror(rc);
+            log_error("%s", err);
+            break;
+        }
+        if (rc == MDB_NOTFOUND)
+            break;
+
+        const block_t *block = (const block_t*)val.mv_data;
+
+        if (block->height + 60 < height)
+            break;
+        ++blocks_in_last_60;
+        if (blocks_in_last_60 == 60)
+            break;
+    }
+
+    mdb_cursor_close(cursor);
+    mdb_txn_abort(txn);
+
+    effective_pool_fee[aux] = config.pool_fee;
+    if (config.pool_fee_increase_threshold < 1.0f)
+    {
+      effective_pool_fee[aux] += (blocks_in_last_60 - config.pool_fee_increase_threshold * 60.0) / 60.0 * (config.pool_max_fee - config.pool_fee) / (1.0f - config.pool_fee_increase_threshold);
+      if (effective_pool_fee[aux] < config.pool_fee)
+        effective_pool_fee[aux] = config.pool_fee;
+      if (effective_pool_fee[aux] > 1.0)
+        effective_pool_fee[aux] = 1.0;
+    }
+    pool_stats.extra_pool_fee[aux] = effective_pool_fee[aux] - config.pool_fee;
+    const char *name = aux ? config.aux_chain_name : config.main_chain_name;
+    log_info("%u %s blocks in the last 60, pool fee set to %.2f%%", blocks_in_last_60, name, effective_pool_fee[aux] * 100.0f);
+
+    return 0;
+}
+
 static void
 rpc_on_block_template(const char* data, rpc_callback_t *callback)
 {
@@ -1911,6 +1992,7 @@ rpc_on_block_template(const char* data, rpc_callback_t *callback)
     JSON_GET_OR_WARN(chains, result, json_type_array);
     pool_stats.aux_block_reward = 0;
     pool_stats.block_reward = 0;
+    uint64_t aux_height = 0, main_height = 0;
     if (chains)
     {
       struct array_list *al = json_object_get_array(chains);
@@ -1924,16 +2006,19 @@ rpc_on_block_template(const char* data, rpc_callback_t *callback)
           {
             JSON_GET_OR_WARN(genesis_block, j, json_type_string);
             JSON_GET_OR_WARN(miner_reward, j, json_type_int);
-            if (genesis_block && miner_reward)
+            JSON_GET_OR_WARN(height, j, json_type_int);
+            if (genesis_block && miner_reward && height)
             {
               const char *genesis_str = json_object_get_string(genesis_block);
               if (!strncmp(genesis_str, config.aux_chain_genesis, 64))
               {
                 pool_stats.aux_block_reward = json_object_get_int64(miner_reward);
+                aux_height = json_object_get_int64(height);
               }
               else if (!strncmp(genesis_str, config.main_chain_genesis, 64))
               {
                 pool_stats.block_reward = json_object_get_int64(miner_reward);
+                main_height = json_object_get_int64(height);
               }
             }
           }
@@ -1947,6 +2032,11 @@ rpc_on_block_template(const char* data, rpc_callback_t *callback)
     response_to_block_template(result, top);
     clients_send_job();
     json_object_put(root);
+
+    if (aux_height > 0)
+      update_pool_fee(true, aux_height);
+    if (main_height > 0)
+      update_pool_fee(false, main_height);
 }
 
 static int
@@ -4220,6 +4310,8 @@ read_config(const char *config_file)
     config.retarget_time = 30;
     config.retarget_ratio = 0.55;
     config.pool_fee = 0.01;
+    config.pool_fee_increase_threshold = 1.0;
+    config.pool_max_fee = 0.01;
     config.payment_threshold = 0.33;
     config.aux_payment_threshold = 10;
     strcpy(config.pool_listen, "0.0.0.0");
@@ -4374,6 +4466,14 @@ read_config(const char *config_file)
         else if (strcmp(key, "pool-fee") == 0)
         {
             config.pool_fee = atof(val);
+        }
+        else if (strcmp(key, "pool-fee-increase-threshold") == 0)
+        {
+            config.pool_fee_increase_threshold = atof(val);
+        }
+        else if (strcmp(key, "pool-max-fee") == 0)
+        {
+            config.pool_max_fee = atof(val);
         }
         else if (strcmp(key, "payment-threshold") == 0)
         {
@@ -4611,6 +4711,8 @@ print_config(void)
         "  pool-start-diff = %"PRIu64"\n"
         "  pool-fixed-diff = %"PRIu64"\n"
         "  pool-fee = %g\n"
+        "  pool-fee-increase-threshold = %g\n"
+        "  pool-max-fee = %g\n"
         "  payment-threshold = %g\n"
         "  aux-payment-threshold = %g\n"
         "  share-mul = %.2f\n"
@@ -4653,6 +4755,8 @@ print_config(void)
         config.pool_start_diff,
         config.pool_fixed_diff,
         config.pool_fee,
+        config.pool_fee_increase_threshold,
+        config.pool_max_fee,
         config.payment_threshold,
         config.aux_payment_threshold,
         config.share_mul,

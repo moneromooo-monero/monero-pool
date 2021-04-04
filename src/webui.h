@@ -52,6 +52,7 @@ typedef struct pool_stats_t
     time_t last_template_fetched;
     uint64_t block_reward;
     uint64_t aux_block_reward;
+    double extra_pool_fee[2];
 } pool_stats_t;
 
 typedef struct wui_context_t

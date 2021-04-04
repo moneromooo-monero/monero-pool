@@ -123,6 +123,8 @@ send_json_stats(struct evhttp_request *req, void *arg)
             "\"payment_threshold\":%g,"
             "\"aux_payment_threshold\":%g,"
             "\"pool_fee\":%g,"
+            "\"extra_pool_fee\":%g,"
+            "\"aux_extra_pool_fee\":%g,"
             "\"block_reward\":%g,"
             "\"aux_block_reward\":%g,"
             "\"pool_port\":%d,"
@@ -140,6 +142,7 @@ send_json_stats(struct evhttp_request *req, void *arg)
             "\"aux_name\":\"%s\""
             "}", ph, rh, rh2, nh, nd, height, nh2, nd2, height2, ltf, lbf, lbf2, pbf, pbf2,
             context->payment_threshold, context->aux_payment_threshold, context->pool_fee,
+            context->pool_stats->extra_pool_fee[0], context->pool_stats->extra_pool_fee[1],
             context->pool_stats->block_reward / 1e12, context->pool_stats->aux_block_reward / 1e8,
             context->pool_port, context->pool_ssl_port,
             ss, context->pool_stats->connected_accounts, context->pool_stats->aux_connected_accounts,
