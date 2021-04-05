@@ -250,7 +250,10 @@
 
         <small><a href="https://github.com/jtgrassie/monero-pool">https://github.com/jtgrassie/monero-pool</a></small>
         <script>
-            var extra_fee_help_text = "<span class=\"tooltiptext\">The pool controls too much of the network hash rate<br>The fee will be increased until it decreases</span>";
+            function get_extra_fee_help_text(name)
+            {
+                return  "<span class=\"tooltiptext\">The pool controls too much of the " + name + " hash rate<br>The fee will be increased until it decreases</span>";
+            }
             function format_last_time(last)
             {
                 var now = parseInt(new Date().getTime() / 1000);
@@ -348,11 +351,11 @@
                     else if (e == "pool_fee")
                         el.innerHTML = (stats[e]*100) + "%";
                     else if (e == "extra_pool_fee")
-                        el.innerHTML = stats[e] > 0.0 ? "(<u>+" + max_precision(stats[e]*100, 2) + "%</u>)" + extra_fee_help_text : "";
+                        el.innerHTML = stats[e] > 0.0 ? "(<u>+" + max_precision(stats[e]*100, 2) + "%</u>)" + get_extra_fee_help_text("Monero") : "";
                     else if (e == "aux_pool_fee")
                         el.innerHTML = (stats[e]*100) + "%";
                     else if (e == "aux_extra_pool_fee")
-                        el.innerHTML = stats[e] > 0.0 ? "(<u>+" + max_precision(stats[e]*100, 2) + "%</u>)" + extra_fee_help_text : "";
+                        el.innerHTML = stats[e] > 0.0 ? "(<u>+" + max_precision(stats[e]*100, 2) + "%</u>)" + get_extra_fee_help_text(stats["aux_name"]) : "";
                     else if (e == "allow_self_select")
                         el.innerHTML = stats[e] == 1 ? "Yes" : "No";
                     else if (e == "round_hashes")
